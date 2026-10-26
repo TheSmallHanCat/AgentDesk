@@ -4,19 +4,32 @@ use crate::{
 };
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
-use tokio::sync::Mutex;
+use tokio::sync::{watch, Mutex};
 use tokio_util::sync::CancellationToken;
 
 struct Entry {
-    socket: String,
+    id: String,
     cancel: CancellationToken,
     projects: HashSet<String>,
     state: String,
-    finished: tokio::task::JoinHandle<()>,
+    finished: watch::Receiver<bool>,
+}
+struct Completion(watch::Sender<bool>);
+impl Drop for Completion {
+    fn drop(&mut self) {
+        self.0.send_replace(true);
+    }
 }
 #[derive(Default)]
 pub struct LocalChannels {
     entries: Mutex<HashMap<String, Entry>>,
+}
+fn cancelled() -> AppError {
+    AppError::new(
+        "E_CANCELLED",
+        "local.enable",
+        "Execution channel preparation was cancelled",
+    )
 }
 impl LocalChannels {
     pub async fn status(&self, target: &Target) -> Value {
@@ -41,6 +54,48 @@ impl LocalChannels {
         }
         Ok(())
     }
+    async fn reserve(
+        &self,
+        target: &Target,
+    ) -> AppResult<(String, CancellationToken, Option<Completion>)> {
+        let mut entries = self.entries.lock().await;
+        if let Some(entry) = entries
+            .get(&target.connection_id)
+            .filter(|e| !*e.finished.borrow())
+        {
+            if entry.state != "ready" || entry.cancel.is_cancelled() {
+                return Err(AppError::new(
+                    "E_BUSY",
+                    "local.enable",
+                    "Execution channel preparation or cleanup is already running",
+                ));
+            }
+            return Ok((entry.id.clone(), entry.cancel.clone(), None));
+        }
+        let id = uuid::Uuid::new_v4().to_string();
+        let cancel = CancellationToken::new();
+        let (done, finished) = watch::channel(false);
+        entries.insert(
+            target.connection_id.clone(),
+            Entry {
+                id: id.clone(),
+                cancel: cancel.clone(),
+                projects: HashSet::new(),
+                state: "preparing".into(),
+                finished,
+            },
+        );
+        Ok((id, cancel, Some(Completion(done))))
+    }
+    async fn remove_finished(&self, target: &Target, id: &str) {
+        let mut entries = self.entries.lock().await;
+        if entries
+            .get(&target.connection_id)
+            .is_some_and(|e| e.id == id && *e.finished.borrow())
+        {
+            entries.remove(&target.connection_id);
+        }
+    }
     #[cfg(windows)]
     pub async fn enable(
         &self,
@@ -61,53 +116,51 @@ impl LocalChannels {
             .project_id
             .as_ref()
             .ok_or_else(|| AppError::new("E_TARGET", "local.enable", "Project target required"))?;
-        let mut entries = self.entries.lock().await;
-        if let Some(entry) = entries
-            .get_mut(&target.connection_id)
-            .filter(|e| !e.cancel.is_cancelled() && e.state == "ready")
-        {
-            entry.projects.insert(project_id.clone());
-            return Ok(json!({"state":"ready","enabled":true}));
-        }
-        if let Some(previous) = entries.remove(&target.connection_id) {
-            previous.cancel.cancel();
-            let _ = previous.finished.await;
-        }
-        let owner = target.clone();
-        let notify = |value: &str| {
-            let _ = app.emit("device-state", json!({"target":owner,"state":value}));
-        };
-        notify("preparing");
-        let client = state.hosts.client(&state.ssh, &state.db, target).await?;
-        let registration = client.request("device.register", json!({})).await?;
-        let socket = registration["tunnelSocket"]
-            .as_str()
-            .ok_or_else(|| AppError::new("E_PROTOCOL", "local.enable", "Device socket missing"))?
-            .to_owned();
-        let prepared = async {
+        let (id, cancel, completion) = self.reserve(target).await?;
+        let reuse = completion.is_none();
+        let mut client = None;
+        let mut registration = Value::Null;
+        let mut socket = String::new();
+        let mut executor = None;
+        let prepare = async {
+            client = Some(crate::commands::session::project_client(state, target).await?);
+            let client = client.as_ref().unwrap();
+            if !reuse {
+                let _ = app.emit("device-state", json!({"target":target,"state":"preparing"}));
+                registration = client.request("device.register", json!({})).await?;
+                socket = registration["tunnelSocket"]
+                    .as_str()
+                    .ok_or_else(|| {
+                        AppError::new("E_PROTOCOL", "local.enable", "Device socket missing")
+                    })?
+                    .to_owned();
+            }
+            client
+                .request("device.project.enable", json!({"projectId":project_id}))
+                .await?;
+            if reuse {
+                return Ok(());
+            }
             let resources = ExecutorResources::discover(
                 &app.path()
                     .resource_dir()
                     .map_err(|e| AppError::io("local.resources", e))?,
             );
-            LocalExecutor::start(resources).await
-        }
-        .await;
-        let mut executor = match prepared {
-            Ok(executor) => executor,
-            Err(error) => {
-                let _ = client.request("device.offline", json!({})).await;
-                notify("error");
-                return Err(error);
-            }
-        };
-        let cancel = CancellationToken::new();
-        let result = async {
+            executor = Some(LocalExecutor::start(resources).await?);
+            let executor = executor.as_ref().unwrap();
             state
                 .ssh
                 .reverse_local(target, &socket, executor.port(), cancel.clone())
                 .await?;
-            notify("probing");
+            {
+                let mut entries = self.entries.lock().await;
+                let entry = entries
+                    .get_mut(&target.connection_id)
+                    .filter(|e| e.id == id && !e.cancel.is_cancelled())
+                    .ok_or_else(cancelled)?;
+                entry.state = "probing".into();
+            }
+            let _ = app.emit("device-state", json!({"target":target,"state":"probing"}));
             let mut params = serde_json::to_value(executor.credentials()).map_err(|_| {
                 AppError::new(
                     "E_EXECUTOR",
@@ -125,20 +178,71 @@ impl LocalChannels {
                 ));
             }
             Ok(())
-        }
-        .await;
+        };
+        let result = tokio::select! { biased;
+            _ = cancel.cancelled() => Err(cancelled()),
+            result = prepare => result,
+        };
+        let mut entries = self.entries.lock().await;
+        let result = result.and_then(|()| {
+            if entries
+                .get(&target.connection_id)
+                .is_some_and(|e| e.id == id && !e.cancel.is_cancelled())
+            {
+                Ok(())
+            } else {
+                Err(cancelled())
+            }
+        });
         if let Err(error) = result {
-            let _ = state.ssh.cancel_reverse_local(target, &socket).await;
-            let _ = client.request("device.offline", json!({})).await;
-            executor.stop().await;
-            notify("error");
+            drop(entries);
+            if !reuse {
+                cancel.cancel();
+                if let Some(mut executor) = executor {
+                    executor.stop().await;
+                }
+                if !socket.is_empty() {
+                    let _ = state.ssh.cancel_reverse_local(target, &socket).await;
+                }
+                if let Some(client) = client {
+                    if registration["generation"].is_null() {
+                        client.cancel.cancel();
+                    } else {
+                        let offline = client.request(
+                            "device.offline",
+                            json!({"generation":registration["generation"]}),
+                        );
+                        if tokio::time::timeout(std::time::Duration::from_secs(2), offline)
+                            .await
+                            .is_err()
+                        {
+                            client.cancel.cancel();
+                        }
+                    }
+                }
+                let _ = app.emit("device-state", json!({"target":target,"state":"closed"}));
+                drop(completion);
+                self.remove_finished(target, &id).await;
+            }
             return Err(error);
         }
+        // The short commit section cannot race close's cancellation transition.
+        let entry = entries
+            .get_mut(&target.connection_id)
+            .filter(|e| e.id == id && !e.cancel.is_cancelled())
+            .ok_or_else(cancelled)?;
+        entry.projects.insert(project_id.clone());
+        if reuse {
+            return Ok(json!({"state":"ready","enabled":true}));
+        }
+        let mut executor = executor.unwrap();
+        let client = client.unwrap();
         let task_cancel = cancel.clone();
         let ssh = state.ssh.clone();
-        let task_socket = socket.clone();
-        let task_owner = target.clone();
-        let finished = tokio::spawn(async move {
+        let owner = target.clone();
+        let generation = registration["generation"].clone();
+        tokio::spawn(async move {
+            let _completion = completion;
             let mut health = tokio::time::interval(std::time::Duration::from_secs(1));
             let failed = loop {
                 tokio::select! {
@@ -149,30 +253,120 @@ impl LocalChannels {
             };
             task_cancel.cancel();
             executor.stop().await;
-            let _ = ssh.cancel_reverse_local(&task_owner, &task_socket).await;
-            let _ = client.request("device.offline", json!({})).await;
+            let _ = ssh.cancel_reverse_local(&owner, &socket).await;
+            let offline = client.request("device.offline", json!({"generation":generation}));
+            if tokio::time::timeout(std::time::Duration::from_secs(2), offline)
+                .await
+                .is_err()
+            {
+                client.cancel.cancel();
+            }
             let _ = app.emit(
                 "device-state",
-                json!({"target":task_owner,"state":if failed {"error"} else {"closed"}}),
+                json!({"target":owner,"state":if failed {"error"} else {"closed"}}),
             );
         });
-        entries.insert(
-            target.connection_id.clone(),
-            Entry {
-                socket,
-                cancel,
-                projects: HashSet::from([project_id.clone()]),
-                state: "ready".into(),
-                finished,
-            },
-        );
+        entry.state = "ready".into();
         Ok(json!({"state":"ready","enabled":true}))
     }
-    pub async fn close(&self, ssh: &crate::ssh::manager::SshManager, target: &Target) {
-        if let Some(entry) = self.entries.lock().await.remove(&target.connection_id) {
-            entry.cancel.cancel();
-            let _ = ssh.cancel_reverse_local(target, &entry.socket).await;
-            let _ = entry.finished.await;
+    pub async fn revoke(
+        &self,
+        state: &crate::state::AppState,
+        target: &Target,
+    ) -> AppResult<Value> {
+        if !crate::local::fs::local(&state.db, target)? {
+            return Err(AppError::new(
+                "E_TARGET",
+                "local.revoke",
+                "Local project required",
+            ));
         }
+        let client = crate::commands::session::project_client(state, target).await?;
+        client
+            .request(
+                "device.project.revoke",
+                json!({"projectId":target.project_id}),
+            )
+            .await?;
+        let last = {
+            let mut entries = self.entries.lock().await;
+            if let Some(entry) = entries.get_mut(&target.connection_id) {
+                if let Some(project) = &target.project_id {
+                    entry.projects.remove(project);
+                }
+                entry.projects.is_empty()
+            } else {
+                false
+            }
+        };
+        if last {
+            self.close(&state.ssh, target).await;
+        }
+        Ok(self.status(target).await)
+    }
+    async fn cancel_entry(&self, target: &Target) -> Option<(String, watch::Receiver<bool>)> {
+        let mut entries = self.entries.lock().await;
+        let entry = entries.get_mut(&target.connection_id)?;
+        entry.cancel.cancel();
+        entry.projects.clear();
+        entry.state = "closed".into();
+        Some((entry.id.clone(), entry.finished.clone()))
+    }
+    pub async fn close(&self, _ssh: &crate::ssh::manager::SshManager, target: &Target) {
+        if let Some((id, mut finished)) = self.cancel_entry(target).await {
+            while !*finished.borrow_and_update() {
+                if finished.changed().await.is_err() {
+                    break;
+                }
+            }
+            self.remove_finished(target, &id).await;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn target(id: &str) -> Target {
+        Target {
+            connection_id: id.into(),
+            project_id: Some("p".into()),
+            session_id: None,
+            request_seq: 1,
+            device_local: true,
+        }
+    }
+    #[tokio::test]
+    async fn preparing_does_not_block_status_or_cancellation_and_stale_cleanup_is_rejected() {
+        let channels = LocalChannels::default();
+        let owner = target("a");
+        let (old, cancel, completion) = channels.reserve(&owner).await.unwrap();
+        assert_eq!(channels.reserve(&owner).await.err().unwrap().code, "E_BUSY");
+        assert_eq!(
+            tokio::time::timeout(
+                std::time::Duration::from_millis(100),
+                channels.status(&target("b"))
+            )
+            .await
+            .unwrap()["state"],
+            "closed"
+        );
+        assert_eq!(channels.status(&owner).await["state"], "preparing");
+        let (_, mut finished) = tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            channels.cancel_entry(&owner),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(cancel.is_cancelled());
+        assert_eq!(channels.reserve(&owner).await.err().unwrap().code, "E_BUSY");
+        drop(completion);
+        finished.changed().await.unwrap();
+        let (new, _, _) = channels.reserve(&owner).await.unwrap();
+        assert_ne!(old, new);
+        channels.remove_finished(&owner, &old).await;
+        assert_eq!(channels.status(&owner).await["state"], "preparing");
+        assert!(channels.require(&owner).await.is_err());
     }
 }

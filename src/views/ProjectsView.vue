@@ -4,12 +4,14 @@ import { useI18n } from 'vue-i18n'
 import { FolderOpenOutline } from '@vicons/ionicons5'
 import { useDataStore } from '../stores/data'
 import { useToastStore } from '../stores/toast'
+import { useLoginStore } from '../stores/login'
 import { call, desktop, errorText } from '../utils/api'
 import { RequestGuard, unwrap } from '../utils/target'
 import type { Project, Reply } from '../types'
 const { t } = useI18n()
 const data = useDataStore()
 const toast = useToastStore()
+const login = useLoginStore()
 const modal = ref(false)
 const busy = ref(false)
 const error = ref('')
@@ -25,13 +27,31 @@ const blank = (): Project => ({
   name: '',
   path: '/',
   description: '',
-  defaultAgent: 'claude',
+  defaultAgent: '',
   defaultModel: '',
   permissionMode: 'default',
   pinned: false,
   archived: false,
 })
 const form = reactive<Project>(blank())
+const agentOptions = computed(() =>
+  Object.entries(login.agents[form.connectionId] ?? {}).map(([id, caps]) => ({
+    label: id,
+    value: id,
+    disabled: !caps.installed,
+  })),
+)
+watch(
+  () => [modal.value, form.connectionId] as const,
+  async ([open, id]) => {
+    if (!open || !id || !data.online(id)) return
+    try {
+      await login.refresh(id)
+    } catch (value) {
+      if (modal.value && form.connectionId === id) error.value = errorText(value)
+    }
+  },
+)
 const guard = new RequestGuard()
 const recentGuard = new RequestGuard()
 let timer: ReturnType<typeof setTimeout> | undefined
@@ -266,12 +286,7 @@ onUnmounted(() => {
           /></n-form-item>
           <div class="field-grid">
             <n-form-item :label="t('projects.defaultAgent')"
-              ><n-select
-                v-model:value="form.defaultAgent"
-                :options="[
-                  { label: 'Claude Code', value: 'claude' },
-                  { label: 'Codex', value: 'codex' },
-                ]" /></n-form-item
+              ><n-select v-model:value="form.defaultAgent" :options="agentOptions" /></n-form-item
             ><n-form-item :label="t('projects.defaultModel')"
               ><n-input v-model:value="form.defaultModel"
             /></n-form-item>
@@ -281,9 +296,10 @@ onUnmounted(() => {
               v-model:value="form.permissionMode"
               :options="[
                 { label: t('projects.approvalDefault'), value: 'default' },
-                { label: t('projects.approvalPlan'), value: 'plan' },
+                { label: t('projects.approvalPlan'), value: 'plan', disabled: !!form.deviceLocal },
               ]"
           /></n-form-item>
+          <p v-if="form.deviceLocal" class="muted">{{ t('device.planUnavailable') }}</p>
           <p class="muted">{{ t('projects.defaultOnly') }}</p></n-form
         >
         <p v-if="error" class="error-detail" role="alert">{{ error }}</p>

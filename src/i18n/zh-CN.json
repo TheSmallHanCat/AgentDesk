@@ -325,7 +325,7 @@
   "projects.chooseLocal": "选择本机目录",
   "device.channel": "执行通道",
   "device.enable": "授权并启用本项目",
-  "device.security": "启用本机执行后，服务器可以以当前 Windows 用户身份执行任意命令，访问该用户有权访问的文件。这不是沙箱。仅信任的服务器才应获得此权限。授权仅适用于本项目，断开连接后失效。\n\n项目：{path}",
+  "device.security": "启用本机执行后，服务器可以以当前 Windows 用户身份执行命令并访问该用户有权访问的文件。这不是沙箱。安全边界是服务器上的这个 Linux 用户：以该用户运行的任何程序，在通道开启期间都能连接本机。按项目授权用于防止误用，不是对抗恶意程序的隔离。仅向信任的服务器和该 Linux 用户下的程序授权。撤销最后一个项目或断开设备后，设备密钥会立即删除。\n\n项目：{path}",
   "device.state.unprepared": "未准备",
   "device.state.preparing": "准备中",
   "device.state.probing": "探测中",
@@ -378,5 +378,8 @@
   "login.reason.E_LOGIN_EXPIRED": "授权链接或代码已过期，请重新开始登录。",
   "login.reason.E_LOGIN_CANCELLED": "登录已取消。",
   "login.reason.E_DISCONNECTED": "连接已断开，本次登录已失效。",
-  "login.reason.UNKNOWN": "官方登录未完成，请重新开始登录并检查连接状态。"
+  "login.reason.UNKNOWN": "官方登录未完成，请重新开始登录并检查连接状态。",
+  "device.revoke": "撤销本项目授权",
+  "device.state.revoking": "正在撤销",
+  "device.planUnavailable": "本机项目不支持计划模式：SSH 执行通道无法保证本机文件只读。"
 }

@@ -93,6 +93,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::device::device_status,
             commands::device::device_enable,
+            commands::device::device_revoke,
             commands::env::env_probe,
             commands::env::env_install_plan,
             commands::env::env_install_run,

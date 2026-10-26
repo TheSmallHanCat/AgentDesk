@@ -125,3 +125,11 @@ test('a later file request prevents an earlier response from selecting a tab', a
   assert.equal(store.tabs.length, 1)
   assert.equal(store.tabs[0].path, '/app/latest.txt')
 })
+
+test('native terminal tabs preserve an agent identifier supplied by capabilities', () => {
+  setActivePinia(createPinia())
+  const store = useWorkspaceStore()
+  store.openTerminal(pendingProject, 'registered-agent')
+  assert.equal(store.tabs[0].kind, 'registered-agent')
+  assert.match(store.tabs[0].title, /^registered-agent · /)
+})

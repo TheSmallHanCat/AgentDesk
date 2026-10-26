@@ -325,7 +325,7 @@
   "projects.chooseLocal": "Choose local folder",
   "device.channel": "Execution channel",
   "device.enable": "Authorize and enable this project",
-  "device.security": "The server can execute arbitrary commands as your Windows user and access files available to that user. This is not a sandbox. Enable only for a trusted server. Authorization applies to this project until disconnection.\n\nProject: {path}",
+  "device.security": "Local execution grants the server command and file access as your current Windows user. This is not a sandbox. The security boundary is this Linux user on the server: any program running as that user can connect to this computer while the channel is open. Project authorization prevents accidental misuse; it does not isolate malicious programs. Trust the server and all programs running as that Linux user. Device keys are deleted when the last project is revoked or the device disconnects.\n\nProject: {path}",
   "device.state.unprepared": "Unprepared",
   "device.state.preparing": "Preparing",
   "device.state.probing": "Probing",
@@ -378,5 +378,8 @@
   "login.reason.E_LOGIN_EXPIRED": "The authorization link or code expired. Start sign-in again.",
   "login.reason.E_LOGIN_CANCELLED": "Sign-in was cancelled.",
   "login.reason.E_DISCONNECTED": "Disconnected. This sign-in is no longer valid.",
-  "login.reason.UNKNOWN": "The official sign-in did not complete. Start again and check the connection."
+  "login.reason.UNKNOWN": "The official sign-in did not complete. Start again and check the connection.",
+  "device.revoke": "Revoke this project",
+  "device.state.revoking": "Revoking",
+  "device.planUnavailable": "Plan mode is unavailable for local projects: the SSH execution channel cannot enforce read-only device access."
 }

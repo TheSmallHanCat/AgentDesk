@@ -192,6 +192,9 @@ pub async fn run_append(
     client_msg_id: String,
 ) -> AppResult<Reply<Value>> {
     let client = project_client(&state, &target).await?;
+    if crate::local::fs::local(&state.db, &target)? {
+        state.local_channels.require(&target).await?;
+    }
     Ok(target.reply(
         client
             .request(

@@ -6,6 +6,15 @@ use crate::{
 use serde_json::Value;
 
 #[tauri::command]
+pub async fn device_revoke(
+    state: tauri::State<'_, AppState>,
+    target: Target,
+) -> AppResult<Reply<Value>> {
+    state.ssh.validate_target(&target)?;
+    Ok(target.reply(state.local_channels.revoke(&state, &target).await?))
+}
+
+#[tauri::command]
 pub async fn device_status(
     state: tauri::State<'_, AppState>,
     target: Target,

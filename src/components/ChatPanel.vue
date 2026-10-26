@@ -163,11 +163,14 @@ const context = computed(() => {
         size="small"
         :disabled="
           !data.online(project.connectionId) ||
-          ['preparing', 'probing'].includes(device.state(project).state)
+          ['preparing', 'probing', 'revoking'].includes(device.state(project).state)
         "
         @click="device.enable(project)"
         >{{ t('device.enable') }}</n-button
       >
+      <n-button v-else size="small" @click="device.revoke(project)">{{
+        t('device.revoke')
+      }}</n-button>
       <span
         v-if="
           project.deviceLocal &&

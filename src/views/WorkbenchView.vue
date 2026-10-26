@@ -17,6 +17,11 @@ const { t } = useI18n()
 const data = useDataStore()
 const workspace = useWorkspaceStore()
 const chat = useChatStore()
+const terminalOptions = computed(() =>
+  Object.entries(chat.agents[project.value?.connectionId ?? ''] ?? {})
+    .filter(([, caps]) => caps.nativeTerminal)
+    .map(([id, caps]) => ({ label: id, key: id, disabled: !caps.installed })),
+)
 const creating = ref<Project>()
 const renaming = ref<{ project: Project; id: string }>()
 const renameTitle = ref('')
@@ -267,12 +272,11 @@ onUnmounted(() => stopDrag?.())
               >{{ t('workbench.shell') }}</n-button
             ><n-dropdown
               trigger="click"
-              :options="[
-                { label: 'Claude Code', key: 'claude' },
-                { label: 'Codex', key: 'codex' },
-              ]"
-              @select="(kind: 'claude' | 'codex') => workspace.openTerminal(project!, kind)"
-              ><n-button size="small" :disabled="!data.online(project.connectionId)"
+              :options="terminalOptions"
+              @select="(kind: string) => workspace.openTerminal(project!, kind)"
+              ><n-button
+                size="small"
+                :disabled="!data.online(project.connectionId) || !terminalOptions.length"
                 >{{ t('workbench.terminal') }} ▾</n-button
               ></n-dropdown
             ><n-button size="small" @click="files = !files">{{ t('workbench.files') }}</n-button

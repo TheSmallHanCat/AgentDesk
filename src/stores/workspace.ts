@@ -13,7 +13,7 @@ interface BaseTab {
 }
 export interface TerminalTab extends BaseTab {
   type: 'terminal'
-  kind: 'shell' | 'claude' | 'codex'
+  kind: string
   terminalId?: string
   exited: boolean
 }
@@ -65,12 +65,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       id,
       type: 'terminal',
       target: target(project.connectionId, project.id, project.deviceLocal),
-      title:
-        kind === 'shell'
-          ? 'Shell'
-          : (kind === 'claude' ? 'Claude Code' : 'Codex') +
-            ' · ' +
-            i18n.global.t('workbench.independent'),
+      title: kind === 'shell' ? 'Shell' : kind + ' · ' + i18n.global.t('workbench.independent'),
       path,
       error: '',
       kind,

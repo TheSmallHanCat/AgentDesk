@@ -42,6 +42,7 @@ const modes = computed(() =>
   (selected.value?.permissionModes ?? []).map((value) => ({
     value,
     label: t('chat.mode.' + value, value),
+    disabled: !!props.project?.deviceLocal && value === 'plan',
   })),
 )
 watch(
@@ -114,8 +115,10 @@ async function create() {
             :options="models"
             :disabled="!selected?.available" /></n-form-item
         ><n-form-item :label="t('chat.permission')"
-          ><n-select v-model:value="mode" :options="modes" /></n-form-item
-        ><n-alert v-if="error" type="error">{{ error }}</n-alert
+          ><n-select v-model:value="mode" :options="modes"
+        /></n-form-item>
+        <p v-if="project?.deviceLocal" class="muted">{{ t('device.planUnavailable') }}</p>
+        <n-alert v-if="error" type="error">{{ error }}</n-alert
         ><n-button
           type="primary"
           :loading="busy"
@@ -124,6 +127,7 @@ async function create() {
             !model ||
             !selected?.available ||
             !selected?.loggedIn ||
+            (!!project?.deviceLocal && mode === 'plan') ||
             (!!project?.deviceLocal && !device.state(project).enabled)
           "
           @click="create"

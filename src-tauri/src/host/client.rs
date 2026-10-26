@@ -18,6 +18,22 @@ use tokio::{
     sync::{broadcast, oneshot, Mutex as AsyncMutex},
 };
 use tokio_util::sync::CancellationToken;
+use zeroize::{Zeroize, Zeroizing};
+
+struct RequestBody(Value);
+fn wipe_json(value: &mut Value) {
+    match value {
+        Value::String(text) => text.zeroize(),
+        Value::Array(items) => items.iter_mut().for_each(wipe_json),
+        Value::Object(items) => items.values_mut().for_each(wipe_json),
+        _ => (),
+    }
+}
+impl Drop for RequestBody {
+    fn drop(&mut self) {
+        wipe_json(&mut self.0);
+    }
+}
 
 pub const MAX_FRAME: usize = 4 * 1024 * 1024;
 type Writer = Box<dyn AsyncWrite + Unpin + Send>;
@@ -173,7 +189,8 @@ impl HostClient {
         true
     }
     async fn write(&self, message: &Value) -> AppResult<()> {
-        let mut data = serde_json::to_vec(message).map_err(|e| AppError::io("host.frame", e))?;
+        let mut data =
+            Zeroizing::new(serde_json::to_vec(message).map_err(|e| AppError::io("host.frame", e))?);
         data.push(b'\n');
         if data.len() > MAX_FRAME {
             return Err(AppError::new(
@@ -196,6 +213,7 @@ impl HostClient {
             .map_err(|e| AppError::io("host.write", e))
     }
     pub async fn request(&self, method: &str, params: Value) -> AppResult<Value> {
+        let mut body = RequestBody(params);
         if self.cancel.is_cancelled() {
             return Err(AppError::new(
                 "E_DISCONNECTED",
@@ -220,12 +238,12 @@ impl HostClient {
             pending.insert(id, sender);
         }
         let result = async {
-            tokio::time::timeout(
-                Duration::from_secs(20),
-                self.write(&json!({"jsonrpc":"2.0","id":id,"method":method,"params":params})),
-            )
-            .await
-            .map_err(|_| AppError::new("E_TIMEOUT", "host.write", "Host write timed out"))??;
+            let mut frame = RequestBody(json!({"jsonrpc":"2.0","id":id,"method":method}));
+            frame.0["params"] = std::mem::take(&mut body.0);
+            tokio::time::timeout(Duration::from_secs(20), self.write(&frame.0))
+                .await
+                .map_err(|_| AppError::new("E_TIMEOUT", "host.write", "Host write timed out"))??;
+            drop(frame);
             tokio::time::timeout(Duration::from_secs(90), receiver)
                 .await
                 .map_err(|_| AppError::new("E_TIMEOUT", "host.rpc", "Host response timed out"))?
@@ -373,6 +391,15 @@ impl HostPool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn request_credentials_are_wiped_recursively() {
+        let mut params =
+            json!({"params":{"privateKey":"private-fixture","nested":["secret-fixture"]},"id":1});
+        wipe_json(&mut params);
+        assert_eq!(params["params"]["privateKey"], "");
+        assert_eq!(params["params"]["nested"][0], "");
+        assert_eq!(params["id"], 1);
+    }
     use std::{
         pin::Pin,
         task::{Context, Poll},
