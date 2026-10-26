@@ -2,13 +2,17 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import uuid
 from typing import Any
 
 from .base import AdapterError, RunContext, RunHandle
+from .native_common import close_process
 
 
 class FakeAdapter:
+    kind = "fake"
+
     async def capabilities(self) -> dict[str, Any]:
         return {
             "installed": True, "available": True, "loggedIn": True,
@@ -35,9 +39,11 @@ class FakeAdapter:
             ]
         if not isinstance(steps, list) or len(steps) > 1000 or any(not isinstance(step, dict) for step in steps):
             raise AdapterError("E_INVALID_PARAMS", "adapter.start", "Invalid scripted run", "Provide an array of at most 1000 steps")
+        if any(step.get("type") == "device" for step in steps) and (session.get("kind") != "local" or not session.get("sessionConfig")):
+            raise AdapterError("E_CAPABILITY", "adapter.device", "A ready local execution channel is required")
         await context.save_native(session.get("nativeId") or f"fake_{uuid.uuid4().hex}")
         queue: asyncio.Queue[str] = asyncio.Queue()
-        task = asyncio.create_task(self._run(steps, context, queue))
+        task = asyncio.create_task(self._run(steps, context, queue, session))
         return RunHandle(context.run_id, task, {"queue": queue, "context": context})
 
     async def _item(self, context: RunContext, kind: str, text: str, chunks: int = 1, delay: float = 0.005, **extra: Any) -> None:
@@ -49,7 +55,7 @@ class FakeAdapter:
             await asyncio.sleep(delay)
         await context.emit("item.completed", {"kind": kind, "text": text, **extra}, item_id)
 
-    async def _run(self, steps: list[dict[str, Any]], context: RunContext, queue: asyncio.Queue[str]) -> None:
+    async def _run(self, steps: list[dict[str, Any]], context: RunContext, queue: asyncio.Queue[str], session: dict | None = None) -> None:
         for step in steps:
             kind = step.get("type", "text")
             if kind in {"text", "reasoning", "file_change", "plan"}:
@@ -63,6 +69,8 @@ class FakeAdapter:
                 item_id = f"itm_{uuid.uuid4().hex}"
                 await context.emit("item.completed", {"kind": "tool_call", "name": step.get("name", "Read"), "input": step.get("input", {})}, item_id)
                 await context.emit("item.completed", {"kind": "tool_result", "name": step.get("name", "Read"), "output": step.get("output", "")}, f"itm_{uuid.uuid4().hex}")
+            elif kind == "device":
+                await self._device_script(session or {}, step, context)
             elif kind in {"approval", "question"}:
                 payload = {key: value for key, value in step.items() if key != "type"}
                 if kind == "question" and "questions" not in payload:
@@ -87,6 +95,39 @@ class FakeAdapter:
 
     async def append_input(self, handle: RunHandle, text: str) -> None:
         handle.native["queue"].put_nowait(text)
+
+    async def _device_script(self, session: dict, step: dict, context: RunContext) -> None:
+        script = step.get("script")
+        if session.get("kind") != "local" or not session.get("sessionConfig"):
+            raise AdapterError("E_CAPABILITY", "adapter.device", "A ready local execution channel is required")
+        if not isinstance(script, str) or not script or len(script.encode("utf-8")) > 2_000_000:
+            raise AdapterError("E_INVALID_PARAMS", "adapter.device", "Invalid device script")
+        item_id = f"itm_{uuid.uuid4().hex}"
+        payload = {"kind": "tool_call", "name": "device-script", "input": {"script": script}}
+        await context.emit("item.started", payload, item_id)
+        process = await asyncio.create_subprocess_exec("ssh", "-F", session["sessionConfig"], "device-script", stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT, start_new_session=os.name == "posix")
+        async def send_script():
+            process.stdin.write(script.encode("utf-8"))
+            await process.stdin.drain()
+            process.stdin.close()
+        async def read_output():
+            output = bytearray()
+            while chunk := await process.stdout.read(65536):
+                output.extend(chunk)
+                if len(output) > 8_000_000:
+                    raise AdapterError("E_CAPABILITY", "adapter.device", "Device command output exceeds the retained output limit")
+            return output.decode("utf-8", errors="replace")
+        tasks = [asyncio.create_task(send_script()), asyncio.create_task(read_output())]
+        try:
+            _, output = await asyncio.gather(*tasks)
+            code = await process.wait()
+        finally:
+            for task in tasks:
+                if not task.done(): task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            await close_process(process)
+        await context.emit("item.completed", payload, item_id)
+        await context.emit("item.completed", {"kind": "tool_result", "name": "device-script", "toolCallId": item_id, "output": output, "exitCode": code, "isError": code != 0}, item_id + ":result")
 
     async def stop(self, handle: RunHandle) -> None:
         handle.task.cancel()

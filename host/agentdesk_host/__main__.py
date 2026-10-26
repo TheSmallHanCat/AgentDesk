@@ -8,7 +8,7 @@ import os
 import signal
 from pathlib import Path
 
-from .adapters.fake import FakeAdapter
+from .adapters import registered_adapters
 from .server.service import HostService
 from .server.transport import HostServer
 
@@ -34,15 +34,8 @@ class InstanceLock:
         self.file.close()
 
 
-async def serve(home: Path, fake: bool, idle_exit: float, retention_days: int = 180) -> None:
-    adapters = {}
-    if fake:
-        adapters["fake"] = FakeAdapter()
-    from .adapters.claude import ClaudeAdapter
-    from .adapters.codex import CodexAdapter
-    adapters["claude"] = ClaudeAdapter()
-    adapters["codex"] = CodexAdapter()
-    service = HostService(home, adapters)
+async def serve(home: Path, fake: bool, idle_exit: float, retention_days: int = 180, device_options: dict | None = None) -> None:
+    service = HostService(home, registered_adapters(fake=fake), device_options=device_options)
     service.db.prune_events(retention_days)
     server = HostServer(service)
     stop = asyncio.Event()
@@ -85,12 +78,15 @@ def main() -> None:
     retention_days = config.get("events", {}).get("retention_days", 180)
     if type(retention_days) is not int or not 0 <= retention_days <= 36500:
         parser.error("events.retention_days must be an integer from 0 to 36500")
+    device_options = config.get("device", {})
+    if not isinstance(device_options, dict) or any(type(device_options.get(key, default)) not in {int, float} or not 0 <= device_options.get(key, default) <= 86400 for key, default in (("wait_timeout", 60), ("grace", 300))):
+        parser.error("device.wait_timeout and device.grace must be durations from 0 to 86400 seconds")
     if os.name == "nt":
         parser.error("AgentDesk Host requires a Unix server")
     os.umask(0o077)
     args.home.mkdir(parents=True, exist_ok=True, mode=0o700)
     with InstanceLock(args.home / "run" / "host.lock"):
-        asyncio.run(serve(args.home, args.fake or config.get("agents", {}).get("fake", False), idle_exit, retention_days))
+        asyncio.run(serve(args.home, args.fake or config.get("agents", {}).get("fake", False), idle_exit, retention_days, device_options))
 
 
 if __name__ == "__main__":

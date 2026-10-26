@@ -3,12 +3,16 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Any
 
 from ..adapters.base import AdapterError
 from .service import Client, HostService, MAX_FRAME, encoded
+
+logger = logging.getLogger(__name__)
+DRAIN_TIMEOUT = 30
 
 
 def error_reply(request_id: Any, code: int, message: str, data: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -53,10 +57,19 @@ class HostServer:
                 raise ConnectionError("Slow subscriber disconnected") from None
 
         async def write() -> None:
-            while True:
-                writer.write(await queue.get())
-                await asyncio.wait_for(writer.drain(), timeout=30)
-                queue.task_done()
+            try:
+                while True:
+                    writer.write(await queue.get())
+                    try:
+                        await asyncio.wait_for(writer.drain(), timeout=DRAIN_TIMEOUT)
+                    finally:
+                        queue.task_done()
+            except (TimeoutError, ConnectionError, OSError) as error:
+                logger.warning("Host transport closed: %s", "write_timeout" if isinstance(error, TimeoutError) else "write_failed")
+                writer.close()
+                # A blocked reader must also exit when only the write side failed.
+                if task and not task.done():
+                    task.cancel()
 
         client = Client(send)
         write_task = asyncio.create_task(write())

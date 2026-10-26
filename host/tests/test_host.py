@@ -135,7 +135,7 @@ def test_stop_resume_append_and_busy(tmp_path):
         with pytest.raises(AdapterError) as deletion:
             await service.request(client, "session.delete", {"sessionId": sid})
         assert deletion.value.code == "E_SESSION_BUSY"
-        await service.request(client, "run.append", {"sessionId": sid, "runId": run["runId"], "text": "appended"})
+        await service.request(client, "run.append", {"sessionId": sid, "runId": run["runId"], "clientMsgId": "append", "text": "appended"})
         await asyncio.sleep(0.03)
         await service.request(client, "run.stop", {"sessionId": sid, "runId": run["runId"]})
         await finish(service)

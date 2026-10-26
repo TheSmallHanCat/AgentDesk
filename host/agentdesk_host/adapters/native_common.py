@@ -3,13 +3,70 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import os
 from pathlib import Path
 import re
 import signal
+import shlex
+import shutil
+import tempfile
 
 
 MAX_FRAME = 4 * 1024 * 1024
+
+
+def cached_capabilities(probe):
+    """Coalesce native detection and keep its public result for ten minutes."""
+    @functools.wraps(probe)
+    async def cached(self):
+        if self._caps and asyncio.get_running_loop().time() - self._checked_at < 600:
+            return dict(self._caps)
+        task = getattr(self, "_capability_task", None)
+        if task is None or task.done():
+            task = asyncio.create_task(probe(self))
+            self._capability_task = task
+        return dict(await asyncio.shield(task))
+    return cached
+
+
+class ClaudeProcessGroup:
+    """Wrap the unmodified SDK CLI in setsid and retain its group for cleanup."""
+    def __init__(self, executable: str):
+        self.executable = executable
+        self.directory = None
+        self.pid_path = None
+
+    def prepare(self) -> str:
+        if os.name != "posix":
+            return self.executable
+        setsid = shutil.which("setsid")
+        if not setsid:
+            from .base import AdapterError
+            raise AdapterError("E_CAPABILITY", "claude.process", "setsid is required for native tool process isolation")
+        self.directory = tempfile.TemporaryDirectory(prefix="agentdesk-claude-")
+        root = Path(self.directory.name)
+        self.pid_path = root / "group.pid"
+        wrapper = root / "claude"
+        wrapper.write_text("#!/bin/sh\nprintf '%s\\n' \"$$\" > " + shlex.quote(str(self.pid_path)) + "\nexec " + shlex.join([setsid, "--", self.executable]) + ' "$@"\n', encoding="utf-8")
+        wrapper.chmod(0o700)
+        return str(wrapper)
+
+    async def close(self) -> None:
+        try:
+            if self.pid_path and self.pid_path.is_file():
+                pid = int(self.pid_path.read_text(encoding="ascii").strip())
+                if pid > 1:
+                    for sig in (signal.SIGTERM, signal.SIGKILL):
+                        try:
+                            os.killpg(pid, sig)
+                        except ProcessLookupError:
+                            break
+                        if sig == signal.SIGTERM:
+                            await asyncio.sleep(0.05)
+        finally:
+            if self.directory:
+                self.directory.cleanup()
 
 
 async def close_process(process: asyncio.subprocess.Process) -> None:

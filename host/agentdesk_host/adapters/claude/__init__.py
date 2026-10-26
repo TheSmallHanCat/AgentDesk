@@ -10,7 +10,7 @@ from pathlib import Path
 import uuid
 
 from ..base import AdapterError, RunContext, RunHandle
-from ..native_common import capability, command, version_of
+from ..native_common import ClaudeProcessGroup, cached_capabilities, capability, command, version_of
 
 
 class ClaudeAdapter:
@@ -30,9 +30,10 @@ class ClaudeAdapter:
         path = Path(override) if override else Path(claude_agent_sdk.__file__).parent / "_bundled" / ("claude.exe" if os.name == "nt" else "claude")
         return str(path) if path.is_file() else None
 
+    @cached_capabilities
     async def capabilities(self) -> dict:
         now = asyncio.get_running_loop().time()
-        if self._caps and now - self._checked_at < 10:
+        if self._caps and now - self._checked_at < 600:
             return dict(self._caps)
         executable = self.executable()
         result = capability(permissionModes=["default", "acceptEdits", "plan"])
@@ -52,7 +53,8 @@ class ClaudeAdapter:
                     # Keep only public status fields; discard all other output.
                     logged_in = auth.get("loggedIn") is True and auth_code == 0
                     result.update(loggedIn=logged_in, accountType=auth.get("subscriptionType") if isinstance(auth.get("subscriptionType"), str) else None)
-                    client = sdk.ClaudeSDKClient(options=sdk.ClaudeAgentOptions(cli_path=executable, stderr=lambda _: None))
+                    process_group = ClaudeProcessGroup(executable)
+                    client = sdk.ClaudeSDKClient(options=sdk.ClaudeAgentOptions(cli_path=process_group.prepare(), stderr=lambda _: None))
                     try:
                         async with asyncio.timeout(25):
                             await client.connect()
@@ -65,7 +67,10 @@ class ClaudeAdapter:
                                 models.append({"id": identifier, "name": entry.get("displayName", entry.get("name", identifier))})
                         result.update(models=models, handshake=True, streaming=True, resume=hasattr(sdk, "get_session_info"), approvals=True, stop=hasattr(client, "interrupt"), appendInput=hasattr(client, "query"))
                     finally:
-                        await client.disconnect()
+                        try:
+                            await client.disconnect()
+                        finally:
+                            await process_group.close()
                     result.update(available=logged_in, reason=None if logged_in else "E_NOT_LOGGED_IN")
             except Exception:
                 # Never serialize native exceptions: they may embed auth output.
@@ -80,17 +85,17 @@ class ClaudeAdapter:
         return await asyncio.to_thread(sdk.get_session_info, session["nativeId"], session.get("path")) is not None
 
     async def start_run(self, session: dict, input: dict, ctx: RunContext) -> RunHandle:
-        caps = await self.capabilities()
+        caps = session.get("_capabilities") or await self.capabilities()
         if not caps["installed"]:
             raise AdapterError("E_AGENT_NOT_INSTALLED", "claude.preflight", "Claude SDK CLI is unavailable", "Install the Claude SDK and its bundled CLI")
         if not caps["loggedIn"]:
             raise AdapterError("E_NOT_LOGGED_IN", "claude.auth", "Claude is not logged in", "Sign in from the environment page")
-        if not await self.native_exists(session):
+        if not session.get("_nativeExistsChecked") and not await self.native_exists(session):
             raise AdapterError("E_NATIVE_MISSING", "claude.resume", "Native session record is missing", "Restore the native record or create a new session")
         mode = session.get("permissionMode", "default")
         if mode not in caps["permissionModes"]:
             raise AdapterError("E_CAPABILITY", "claude.permissions", "Unsupported permission mode", "Select a supported permission mode")
-        native = {"client": None, "stopping": False}
+        native = {"client": None, "stopping": False, "pendingInputs": 1, "inputLock": asyncio.Lock(), "sessionId": session.get("nativeId")}
         task = asyncio.create_task(self._run(session, input, ctx, native))
         return RunHandle(ctx.run_id, task, native)
 
@@ -119,27 +124,36 @@ class ClaudeAdapter:
             return {"continue_": True}
 
         native_id = session.get("nativeId") or str(uuid.uuid4())
+        process_group = ClaudeProcessGroup(self.executable())
         options = sdk.ClaudeAgentOptions(
-            cwd=session["path"], cli_path=self.executable(), model=session.get("model") or None,
+            cwd=session["path"], cli_path=process_group.prepare(), model=session.get("model") or None,
             permission_mode=session.get("permissionMode", "default"), can_use_tool=approve,
             include_partial_messages=True, hooks={"PreToolUse": [HookMatcher(hooks=[keep_stream_open])]},
             resume=native_id if session.get("nativeId") else None,
             session_id=None if session.get("nativeId") else native_id,
             stderr=lambda _: None,
+            system_prompt={"type": "preset", "preset": "claude_code", "append": session["deviceInstructions"]} if session.get("deviceInstructions") else None,
         )
         client = sdk.ClaudeSDKClient(options=options)
         native["client"] = client
         # Stream blocks are keyed by native message id + index. Completed SDK
         # blocks replace the same item, rather than duplicating streamed text.
         streamed: dict[int, tuple[str, str, str]] = {}
+        message_streams: dict[str, dict[int, tuple[str, str, str]]] = {}
+        active_indices: dict[str, int] = {}
         file_changes: dict[str, dict] = {}
-        completed_messages: set[str] = set()
+        completed_blocks: set[tuple[str, str]] = set()
+        completed_indices: set[tuple[str, int]] = set()
+        fallback_blocks: dict[tuple[str, str, str], str] = {}
         message_id = ""
+        native["sessionId"] = native_id
+        native.setdefault("pendingInputs", 1)
+        native.setdefault("inputLock", asyncio.Lock())
         try:
             async with asyncio.timeout(30):
                 await client.connect()
             await client.query(input["text"], session_id=native_id)
-            async for message in client.receive_response():
+            async for message in client.receive_messages():
                 kind = type(message).__name__
                 if kind == "SystemMessage":
                     if message.subtype == "init" and message.data.get("session_id"):
@@ -149,10 +163,11 @@ class ClaudeAdapter:
                     event_type = event.get("type")
                     if event_type == "message_start":
                         message_id = event.get("message", {}).get("id") or uuid.uuid4().hex
-                        streamed = {}
+                        streamed = message_streams.setdefault(message_id, {})
                     elif event_type == "content_block_start":
                         block = event.get("content_block", {})
                         index = event.get("index", 0)
+                        active_indices[message_id] = index
                         item_id = block.get("id") or message_id + ":" + str(index)
                         block_kind = {"text": "text", "thinking": "reasoning", "tool_use": "tool_call"}.get(block.get("type"))
                         if block_kind:
@@ -170,12 +185,36 @@ class ClaudeAdapter:
                                 await ctx.emit("item.delta", {"kind": block_kind, "delta": value}, item_id)
                 elif kind == "AssistantMessage":
                     mid = getattr(message, "message_id", None) or message_id or uuid.uuid4().hex
-                    if mid in completed_messages:
-                        continue
-                    completed_messages.add(mid)
                     for index, block in enumerate(message.content):
                         name = type(block).__name__
-                        item_id = streamed.get(index, (mid + ":" + str(index), "", ""))[0]
+                        block_kind = {"TextBlock": "text", "ThinkingBlock": "reasoning", "ToolUseBlock": "tool_call", "ToolResultBlock": "tool_result"}.get(name)
+                        block_id = getattr(block, "id", None) or (str(block.tool_use_id) + ":result" if name == "ToolResultBlock" else None)
+                        # Split AssistantMessages restart enumerate at zero. Match
+                        # a native block id first, then the next compatible stream
+                        # index for this message, never the message id alone.
+                        candidates = [(i, entry) for i, entry in message_streams.get(mid, {}).items() if entry[1] == block_kind]
+                        match = next(((i, entry) for i, entry in candidates if block_id and entry[0] == block_id), None)
+                        if match is None and not block_id:
+                            preferred = index if len(message.content) > 1 else active_indices.get(mid)
+                            match = next(((i, entry) for i, entry in candidates if i == preferred), None)
+                        if match is None:
+                            match = next(((i, entry) for i, entry in candidates if (mid, i) not in completed_indices), None)
+                        if match is None and not block_id:
+                            text = getattr(block, "text", getattr(block, "thinking", None))
+                            match = next(((i, entry) for i, entry in candidates if entry[2] == text and (mid, i) in completed_indices), None)
+                        if match:
+                            stream_index, entry = match
+                            item_id = entry[0]
+                            completed_indices.add((mid, stream_index))
+                        elif block_id:
+                            item_id = block_id
+                        else:
+                            value = getattr(block, "text", getattr(block, "thinking", repr(getattr(block, "content", ""))))
+                            signature = (mid, name, str(getattr(message, "uuid", None) or value) + (":" + str(index) if len(message.content) > 1 else ""))
+                            item_id = fallback_blocks.setdefault(signature, mid + ":" + str(len(fallback_blocks)))
+                        dedup = (mid, str(block_id or item_id))
+                        if dedup in completed_blocks:
+                            continue
                         if name == "TextBlock":
                             payload = {"kind": "text", "text": block.text}
                         elif name == "ThinkingBlock":
@@ -191,6 +230,7 @@ class ClaudeAdapter:
                                 await ctx.emit("item.completed", file_changes.pop(block.tool_use_id), block.tool_use_id + ":file")
                         else:
                             continue
+                        completed_blocks.add(dedup)
                         await ctx.emit("item.completed", payload, item_id)
                 elif kind == "UserMessage":
                     for block in message.content if isinstance(message.content, list) else []:
@@ -207,17 +247,33 @@ class ClaudeAdapter:
                         await ctx.emit("usage", {"tokens": message.usage})
                     if message.is_error and not native["stopping"]:
                         raise AdapterError("E_AGENT", "claude.run", "Claude run failed", "Review the native CLI state and retry")
+                    async with native["inputLock"]:
+                        native["pendingInputs"] = max(0, native["pendingInputs"] - 1)
+                        if native["pendingInputs"] == 0:
+                            native["acceptingInput"] = False
+                            break
         finally:
-            await client.disconnect()
-            native["client"] = None
+            try:
+                await client.disconnect()
+            finally:
+                native["client"] = None
+                await process_group.close()
         if native["stopping"]:
             raise asyncio.CancelledError()
 
     async def append_input(self, run: RunHandle, input):
         client = run.native.get("client")
-        if client is None:
+        if client is None or run.native.get("acceptingInput") is False:
             raise AdapterError("E_SESSION_BUSY", "claude.append", "Run is not ready", "Wait for the run to start")
-        await client.query(input["text"] if isinstance(input, dict) else input)
+        async with run.native.setdefault("inputLock", asyncio.Lock()):
+            if run.native.get("acceptingInput") is False:
+                raise AdapterError("E_SESSION_BUSY", "claude.append", "Run has finished receiving input")
+            run.native["pendingInputs"] = run.native.get("pendingInputs", 1) + 1
+            try:
+                await client.query(input["text"] if isinstance(input, dict) else input, session_id=run.native.get("sessionId") or "default")
+            except BaseException:
+                run.native["pendingInputs"] -= 1
+                raise
 
     async def stop(self, run: RunHandle):
         run.native["stopping"] = True
@@ -248,9 +304,18 @@ class ClaudeAdapter:
             raise AdapterError("E_AGENT_NOT_INSTALLED", "claude.login", "Claude CLI is unavailable", "Install the Host SDK first")
         return [executable, "auth", "login"]
 
+    async def terminal_command(self):
+        return [(await self.login_command())[0]]
+
     async def logout(self):
         args = await self.login_command()
         code, _ = await command([args[0], "auth", "logout"])
         if code:
             raise AdapterError("E_AGENT", "claude.logout", "Official logout command failed", "Check the CLI state using the native terminal")
         self._caps = None
+
+    async def close(self):
+        task = getattr(self, "_capability_task", None)
+        if task and not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)

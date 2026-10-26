@@ -96,6 +96,24 @@
         },
         "path": {
           "type": "string"
+        },
+        "archived": {
+          "type": "boolean"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "deviceId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "projectPath": {
+          "type": "string"
+        },
+        "executionPolicy": {
+          "$ref": "#/$defs/JsonValue"
         }
       },
       "required": [
@@ -141,6 +159,18 @@
         },
         "archived": {
           "type": "boolean"
+        },
+        "nativeRoot": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "deviceId": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
@@ -510,7 +540,10 @@
         },
         "kind": {
           "type": "string",
-          "const": "remote"
+          "enum": [
+            "remote",
+            "local"
+          ]
         }
       },
       "required": [
@@ -541,6 +574,9 @@
       "properties": {
         "projectId": {
           "type": "string"
+        },
+        "archived": {
+          "type": "boolean"
         }
       },
       "required": [
@@ -608,11 +644,11 @@
       "properties": {
         "deleted": {
           "type": "boolean"
+        },
+        "archived": {
+          "type": "boolean"
         }
-      },
-      "required": [
-        "deleted"
-      ]
+      }
     },
     "SessionHistoryParams": {
       "type": "object",
@@ -675,12 +711,16 @@
         },
         "text": {
           "type": "string"
+        },
+        "clientMsgId": {
+          "type": "string"
         }
       },
       "required": [
         "sessionId",
         "runId",
-        "text"
+        "text",
+        "clientMsgId"
       ]
     },
     "RunStopParams": {
@@ -736,6 +776,9 @@
       "additionalProperties": false,
       "properties": {
         "sessionId": {
+          "type": "string"
+        },
+        "subscriptionId": {
           "type": "string"
         }
       },
@@ -1018,6 +1061,51 @@
       "required": [
         "cancelled"
       ]
+    },
+    "SessionRestoreParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sessionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sessionId"
+      ]
+    },
+    "SyncUnsubscribeParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sessionId": {
+          "type": "string"
+        },
+        "subscriptionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sessionId"
+      ]
+    },
+    "DeviceOfflineParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {},
+      "required": []
+    },
+    "AgentTerminalStartParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "agent": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "agent"
+      ]
     }
   },
   "x-methods": {
@@ -1277,6 +1365,65 @@
       },
       "result": {
         "$ref": "#/$defs/HostCancelShutdownResult"
+      }
+    },
+    "session.restore": {
+      "params": {
+        "$ref": "#/$defs/SessionRestoreParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Session"
+      }
+    },
+    "sync.unsubscribe": {
+      "params": {
+        "$ref": "#/$defs/SyncUnsubscribeParams"
+      },
+      "result": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "subscribed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "subscribed"
+        ]
+      }
+    },
+    "device.offline": {
+      "params": {
+        "$ref": "#/$defs/DeviceOfflineParams"
+      },
+      "result": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "state": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "state"
+        ]
+      }
+    },
+    "agent.terminal.start": {
+      "params": {
+        "$ref": "#/$defs/AgentTerminalStartParams"
+      },
+      "result": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "command": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "command"
+        ]
       }
     }
   },

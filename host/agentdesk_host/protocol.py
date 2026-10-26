@@ -104,6 +104,11 @@ class Session:
     createdAt: str
     updatedAt: str
     path: str | None = None
+    archived: bool | None = None
+    kind: str | None = None
+    deviceId: str | None | None = None
+    projectPath: str | None = None
+    executionPolicy: JsonValue | None = None
 
 
 @dataclass(kw_only=True)
@@ -115,6 +120,8 @@ class HostProject:
     defaultAgent: str | None | None = None
     createdAt: str | None = None
     archived: bool | None = None
+    nativeRoot: str | None | None = None
+    deviceId: str | None | None = None
 
 
 @dataclass(kw_only=True)
@@ -232,7 +239,7 @@ class ProjectUpsertParams:
     path: str
     name: str
     defaultAgent: str | None = None
-    kind: Literal['remote'] | None = None
+    kind: Literal['remote', 'local'] | None = None
 
 
 @dataclass(kw_only=True)
@@ -244,6 +251,7 @@ class ProjectArchiveParams:
 @dataclass(kw_only=True)
 class SessionListParams:
     projectId: str
+    archived: bool | None = None
 
 
 @dataclass(kw_only=True)
@@ -268,7 +276,8 @@ class SessionDeleteParams:
 
 @dataclass(kw_only=True)
 class SessionDeleteResult:
-    deleted: bool
+    deleted: bool | None = None
+    archived: bool | None = None
 
 
 @dataclass(kw_only=True)
@@ -291,6 +300,7 @@ class RunAppendParams:
     sessionId: str
     runId: str
     text: str
+    clientMsgId: str
 
 
 @dataclass(kw_only=True)
@@ -314,6 +324,7 @@ class ApprovalRespondResult:
 @dataclass(kw_only=True)
 class SyncSubscribeParams:
     sessionId: str
+    subscriptionId: str | None = None
 
 
 @dataclass(kw_only=True)
@@ -410,3 +421,24 @@ class HostPrepareShutdownResult:
 @dataclass(kw_only=True)
 class HostCancelShutdownResult:
     cancelled: Literal[True]
+
+
+@dataclass(kw_only=True)
+class SessionRestoreParams:
+    sessionId: str
+
+
+@dataclass(kw_only=True)
+class SyncUnsubscribeParams:
+    sessionId: str
+    subscriptionId: str | None = None
+
+
+@dataclass(kw_only=True)
+class DeviceOfflineParams:
+    pass
+
+
+@dataclass(kw_only=True)
+class AgentTerminalStartParams:
+    agent: str

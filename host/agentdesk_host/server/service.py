@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import ntpath
 import os
 import platform
 import shlex
@@ -13,6 +14,7 @@ from typing import Any, Awaitable, Callable
 
 from .. import __version__
 from ..adapters.base import AdapterError, AgentAdapter, RunContext, RunHandle
+from ..device.manager import DeviceManager, instructions, project_key
 from ..store.database import Database, now
 
 MAX_FRAME = 4 * 1024 * 1024
@@ -47,11 +49,12 @@ class Client:
     send: Callable[[dict[str, Any]], Awaitable[None]]
     device_id: str | None = None
     subscriptions: set[str] = field(default_factory=set)
+    subscription_tokens: dict[str, set[str]] = field(default_factory=dict)
     server_requests: dict[str, tuple[str, str]] = field(default_factory=dict)
 
 
 class HostService:
-    def __init__(self, home: Path, adapters: dict[str, AgentAdapter] | None = None):
+    def __init__(self, home: Path, adapters: dict[str, AgentAdapter] | None = None, *, device_options: dict | None = None):
         self.home = Path(home)
         self.home.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.db = Database(self.home / "state" / "host.sqlite")
@@ -65,6 +68,11 @@ class HostService:
         self.approval_waiters: dict[str, asyncio.Future] = {}
         self.snapshots: dict[tuple[str, str], dict[str, Any]] = {}
         self.mutation_lock = asyncio.Lock()
+        self.capability_cache: dict[str, dict[str, Any]] = {}
+        self.capability_expiry: dict[str, float] = {}
+        self.capability_tasks: dict[str, asyncio.Task] = {}
+        device_options = device_options or {}
+        self.devices = DeviceManager(self.home, self._device_state, self._device_interrupt, wait_timeout=device_options.get("wait_timeout", 60), grace=device_options.get("grace", 300))
         self.draining_until = 0.0
         self.draining_device: str | None = None
         self.last_activity = asyncio.get_event_loop().time()
@@ -72,44 +80,78 @@ class HostService:
 
     def _recover(self) -> None:
         for run in self.db.all("SELECT id,session_id FROM runs WHERE finished_at IS NULL"):
+            unfinished = self.db.all("SELECT e.* FROM events e WHERE e.run_id=? AND e.type='item.started' AND NOT EXISTS (SELECT 1 FROM events c WHERE c.run_id=e.run_id AND c.item_id=e.item_id AND c.type='item.completed') ORDER BY e.seq", (run["id"],))
+            self.db.reserve_seq(len(unfinished) + 1)
             self.db.execute("UPDATE runs SET state='interrupted',finished_at=?,stop_reason='host_restart' WHERE id=?", (now(), run["id"]))
             self.db.execute("UPDATE sessions SET status='idle',updated_at=? WHERE id=?", (now(), run["session_id"]))
+            for item in unfinished:
+                payload = json.loads(item["payload_json"])
+                payload.pop("snapshot", None)
+                self._record(run["session_id"], run["id"], "item.completed", {**payload, "interrupted": True, "reason": "host_restart"}, item["item_id"], commit=False)
             self._record(run["session_id"], run["id"], "run.finished", {"state": "interrupted", "reason": "host_restart"})
         self.db.execute("UPDATE approvals SET state='resolved',decision_json=? WHERE state='pending'", (json.dumps({"behavior": "deny", "reason": "host_restart"}),))
         self.db.execute("UPDATE devices SET online=0")
         self.db.commit()
+        for device in self.db.all("SELECT id FROM devices"):
+            root = self.home / "devices" / device["id"]
+            if root.exists():
+                self.devices.cleanup(self.devices.entry(device["id"]))
+
+    def cached_capabilities(self) -> dict[str, Any]:
+        return {agent: self.capability_cache.get(agent, {"installed": False, "available": False, "loggedIn": False, "streaming": False, "models": [], "permissionModes": [], "reason": "Agent detection pending"}) for agent in self.adapters}
+
+    def _probe_agent(self, agent: str) -> asyncio.Task:
+        existing = self.capability_tasks.get(agent)
+        if existing and not existing.done():
+            return existing
+        async def probe() -> dict[str, Any]:
+            try:
+                result = await self.adapters[agent].capabilities()
+            except Exception:
+                result = {"installed": False, "available": False, "loggedIn": False, "streaming": False, "models": [], "permissionModes": [], "reason": "Agent detection failed"}
+            self.capability_cache[agent] = result
+            self.capability_expiry[agent] = asyncio.get_running_loop().time() + 600
+            return result
+        task = asyncio.create_task(probe())
+        self.capability_tasks[agent] = task
+        return task
+
+    async def _agent_capability(self, agent: str) -> dict[str, Any]:
+        if agent not in self.adapters:
+            raise fail("E_AGENT_NOT_INSTALLED", "agent.detect", "Agent is not configured")
+        if self.capability_expiry.get(agent, 0) > asyncio.get_running_loop().time():
+            return self.capability_cache[agent]
+        return await asyncio.shield(self._probe_agent(agent))
 
     async def capabilities(self) -> dict[str, Any]:
-        result = {}
-        for agent, adapter in self.adapters.items():
-            try:
-                result[agent] = await adapter.capabilities()
-            except Exception:
-                result[agent] = {"installed": False, "available": False, "loggedIn": False, "streaming": False, "reason": "Agent detection failed"}
-        return result
+        values = await asyncio.gather(*(self._agent_capability(agent) for agent in self.adapters))
+        return dict(zip(self.adapters, values))
 
     def _session(self, session_id: str) -> dict[str, Any]:
-        row = self.db.one("SELECT s.*,p.path FROM sessions s JOIN projects p ON p.id=s.project_id WHERE s.id=? AND s.deleted_at IS NULL", (session_id,))
+        row = self.db.one("SELECT s.*,p.path AS project_path,p.kind,p.device_id AS project_device_id,p.native_root AS project_native_root FROM sessions s JOIN projects p ON p.id=s.project_id WHERE s.id=? AND s.deleted_at IS NULL", (session_id,))
         if not row:
             raise fail("E_NOT_FOUND", "session.lookup", "Session does not exist", "Refresh the session list")
-        return {"id": row["id"], "projectId": row["project_id"], "agent": row["agent"], "nativeId": row["native_id"], "title": row["title"], "model": row["model"], "permissionMode": row["permission_mode"], "status": row["status"], "createdAt": row["created_at"], "updatedAt": row["updated_at"], "path": row["path"]}
+        return {"id": row["id"], "projectId": row["project_id"], "agent": row["agent"], "nativeId": row["native_id"], "title": row["title"], "model": row["model"], "permissionMode": row["permission_mode"], "status": row["status"], "createdAt": row["created_at"], "updatedAt": row["updated_at"], "path": row["project_native_root"] if row["kind"] == "local" else row["project_path"], "projectPath": row["project_path"], "kind": row["kind"], "deviceId": row["project_device_id"], "archived": row["archived_at"] is not None, "executionPolicy": getattr(self.adapters.get(row["agent"]), "local_execution_policy", None) if row["kind"] == "local" else None}
 
     def _project(self, project_id: str) -> dict[str, Any]:
         row = self.db.one("SELECT * FROM projects WHERE id=?", (project_id,))
         if not row:
             raise fail("E_NOT_FOUND", "project.lookup", "Project does not exist", "Register the remote project")
-        return {"id": row["id"], "kind": row["kind"], "path": row["path"], "name": row["display_name"], "defaultAgent": row["default_agent"], "createdAt": row["created_at"], "archived": row["archived_at"] is not None}
+        return {"id": row["id"], "kind": row["kind"], "deviceId": row["device_id"], "nativeRoot": row["native_root"], "path": row["path"], "name": row["display_name"], "defaultAgent": row["default_agent"], "createdAt": row["created_at"], "archived": row["archived_at"] is not None}
 
     def _record(self, session_id: str, run_id: str | None, event_type: str, payload: dict[str, Any], item_id: str | None = None, *, seq: int | None = None, commit: bool = True) -> dict[str, Any]:
         seq = self.db.next_seq() if seq is None else seq
+        payload = {key: value for key, value in payload.items() if key != "snapshot"}
         blob = encoded(payload)
         if len(blob) > MAX_EVENT:
             original = payload
-            payload = {"kind": original.get("kind", "text"), "truncated": True, "originalBytes": len(blob), "blob": True}
-            for key in ("text", "delta", "output", "name", "approvalId"):
+            payload = {"kind": original.get("kind", "text"), "truncated": True, "originalBytes": len(blob), "blob": event_type != "item.delta"}
+            for key in ("text", "delta", "output", "name", "approvalId", "tool", "input"):
                 if key in original:
                     value = original[key]
                     payload[key] = value[:16000] if isinstance(value, str) else encoded(value)[:16000].decode("utf-8", errors="ignore")
+            if "questions" in original:
+                payload["questions"] = original["questions"]
             if event_type != "item.delta":
                 self.db.execute("INSERT INTO event_blobs VALUES(?,?,?)", (seq, session_id, blob))
         event = {"seq": seq, "sessionId": session_id, "ts": now(), "type": event_type, "payload": payload}
@@ -124,6 +166,9 @@ class HostService:
         return event
 
     async def emit(self, session_id: str, run_id: str | None, event_type: str, payload: dict[str, Any], item_id: str | None = None) -> None:
+        self.db.reserve_seq()
+        if payload.get("kind") in {"fileChange", "file_change"} and self._session(session_id)["kind"] == "local":
+            payload = {**payload, "scope": "server"}
         if event_type == "run.state" and run_id and isinstance(payload.get("state"), str):
             self.db.execute("UPDATE runs SET state=? WHERE id=?", (payload["state"], run_id))
             self.db.execute("UPDATE sessions SET status=?,updated_at=? WHERE id=?", (payload["state"], now(), session_id))
@@ -152,6 +197,10 @@ class HostService:
 
     async def disconnect(self, client: Client) -> None:
         self.clients.discard(client)
+        await self.devices.disconnect(client)
+        client.subscriptions.clear()
+        client.subscription_tokens.clear()
+        client.server_requests.clear()
         if client.device_id and not any(other.device_id == client.device_id for other in self.clients):
             self.db.execute("UPDATE devices SET online=0,last_seen_at=? WHERE id=?", (now(), client.device_id))
             self.db.commit()
@@ -175,7 +224,10 @@ class HostService:
             self.clients.add(client)
             self.db.execute("INSERT INTO devices VALUES(?,?,?,?,1) ON CONFLICT(id) DO UPDATE SET name=excluded.name,os=excluded.os,last_seen_at=excluded.last_seen_at,online=1", (device_id, name, client_os, now()))
             self.db.commit()
-            return {"protocolVersion": "1.0", "host": __version__, "hostId": self.db.host_id, "capabilities": await self.capabilities(), "currentSeq": self.db.current_seq}
+            for agent in self.adapters:
+                if self.capability_expiry.get(agent, 0) <= asyncio.get_running_loop().time():
+                    self._probe_agent(agent)
+            return {"protocolVersion": "1.0", "host": __version__, "hostId": self.db.host_id, "capabilities": self.cached_capabilities(), "currentSeq": self.db.current_seq}
         if not client.device_id:
             raise fail("E_PROTOCOL_VERSION", "hello", "Handshake is required", "Call hello before business methods")
         if method == "host.prepareShutdown":
@@ -199,14 +251,22 @@ class HostService:
             return await self.capabilities()
         if method == "env.probe":
             return {"layers": [{"name": "system", "status": "ready", "detail": f"{platform.system()} {platform.machine()}"}, {"name": "host", "status": "ready", "detail": __version__}], "agents": await self.capabilities(), "host": {"installed": True, "running": True, "version": __version__, "hostId": self.db.host_id, "activeRuns": len(self.handles)}}
-        if method in {"agent.login.start", "agent.logout"}:
+        if method in {"agent.login.start", "agent.terminal.start", "agent.logout"}:
             agent = required(params, "agent")
             adapter = self.adapters.get(agent)
             if not adapter:
                 raise fail("E_AGENT_NOT_INSTALLED", method, "Agent is not configured", "Install the Agent from Environment")
-            caps = await adapter.capabilities()
+            caps = await self._agent_capability(agent)
             if not caps.get("installed", False):
                 raise fail("E_AGENT_NOT_INSTALLED", method, "Agent is not installed", "Install the Agent from Environment")
+            if method == "agent.terminal.start":
+                terminal_command = getattr(adapter, "terminal_command", None)
+                if terminal_command is None:
+                    raise fail("E_CAPABILITY", method, "Agent has no native terminal command")
+                args = await terminal_command()
+                if not isinstance(args, list) or not args or any(not isinstance(arg, str) or not arg for arg in args):
+                    raise fail("E_CAPABILITY", method, "Agent terminal command is unavailable")
+                return {"command": shlex.join(args)}
             if method == "agent.login.start":
                 command = getattr(adapter, "login_command", None)
                 if command is None:
@@ -221,11 +281,12 @@ class HostService:
             if self.db.one("SELECT r.id FROM runs r JOIN sessions s ON s.id=r.session_id WHERE s.agent=? AND r.finished_at IS NULL LIMIT 1", (agent,)):
                 raise fail("E_SESSION_BUSY", method, "Agent has active runs", "Finish or stop all runs for this Agent before logging out")
             await logout()
+            self.capability_expiry.pop(agent, None)
             return {"loggedOut": True}
         if method == "project.list":
             return [self._project(row["id"]) for row in self.db.all("SELECT id FROM projects ORDER BY created_at")]
         if method == "project.upsert":
-            return self._upsert_project(params)
+            return self._upsert_project(params, client)
         if method == "project.archive":
             project_id = required(params, "projectId")
             self._project(project_id)
@@ -237,19 +298,32 @@ class HostService:
         if method == "session.list":
             project_id = required(params, "projectId")
             self._project(project_id)
-            return [self._session(row["id"]) for row in self.db.all("SELECT id FROM sessions WHERE project_id=? AND deleted_at IS NULL ORDER BY updated_at DESC", (project_id,))]
+            archived = params.get("archived", False)
+            if type(archived) is not bool:
+                raise fail("E_INVALID_PARAMS", method, "Invalid archived flag")
+            return [self._session(row["id"]) for row in self.db.all("SELECT id FROM sessions WHERE project_id=? AND deleted_at IS NULL AND (archived_at IS NOT NULL)=? ORDER BY updated_at DESC", (project_id, archived))]
         if method == "session.create":
             return await self._create_session(params)
-        if method in {"session.rename", "session.delete"}:
+        if method in {"session.rename", "session.delete", "session.restore"}:
             session = self._session(required(params, "sessionId"))
+            if method == "session.restore":
+                async with self.mutation_lock:
+                    self.db.execute("UPDATE sessions SET archived_at=NULL,updated_at=? WHERE id=?", (now(), session["id"]))
+                    self.db.commit()
+                    return self._session(session["id"])
             if method == "session.rename":
                 title = required(params, "title").strip()
                 if not title or len(title) > 256:
                     raise fail("E_INVALID_PARAMS", "session.rename", "Invalid session title")
+                self.db.reserve_seq()
                 self.db.execute("UPDATE sessions SET title=?,updated_at=? WHERE id=?", (title, now(), session["id"]))
                 await self.emit(session["id"], None, "session.updated", {"title": title})
                 return self._session(session["id"])
-            return await self._delete_session(session)
+            # Native existence checks can start a CLI; keep them outside the lock.
+            adapter = self.adapters.get(session["agent"])
+            missing = bool(session.get("nativeId") and adapter and not await adapter.native_exists(session))
+            async with self.mutation_lock:
+                return await self._delete_session(self._session(session["id"]), native_missing=missing)
         if method == "session.history":
             session_id = required(params, "sessionId")
             self._session(session_id)
@@ -260,36 +334,70 @@ class HostService:
             events.reverse()
             return {"events": events, "hasMore": len(rows) > len(events), **({"nextBeforeSeq": events[0]["seq"]} if events else {})}
         if method == "run.send":
+            session = self._session(required(params, "sessionId"))
+            existing = self.db.one("SELECT * FROM client_msgs WHERE client_msg_id=?", (required(params, "clientMsgId"),))
+            caps = {} if existing else await self._agent_capability(session["agent"])
+            native_exists = True
+            if not existing and session.get("nativeId") and caps.get("available") and caps.get("loggedIn"):
+                native_exists = await self.adapters[session["agent"]].native_exists(session)
             async with self.mutation_lock:
-                return await self._send(client, params)
+                return await self._send(client, params, caps, native_exists)
         if method in {"run.append", "run.stop"}:
             session_id = required(params, "sessionId")
             run_id = required(params, "runId")
             self._session(session_id)
+            if method == "run.append":
+                async with self.mutation_lock:
+                    return await self._append(client, params)
             row = self.db.one("SELECT * FROM runs WHERE id=? AND session_id=?", (run_id, session_id))
             if not row or run_id not in self.handles:
                 raise fail("E_NOT_FOUND", method, "Active run does not exist", "Refresh the session")
             adapter, handle = self.handles[run_id]
-            if method == "run.append":
-                await adapter.append_input(handle, required(params, "text"))
-            else:
-                await self.emit(session_id, run_id, "run.state", {"state": "stopping"})
-                await adapter.stop(handle)
+            await self.emit(session_id, run_id, "run.state", {"state": "stopping"})
+            await adapter.stop(handle)
             return {"accepted": True}
         if method == "approval.respond":
             return await self._respond(client, params)
         if method == "sync.subscribe":
             session_id = required(params, "sessionId")
             self._session(session_id)
+            token = required(params, "subscriptionId") if "subscriptionId" in params else session_id
+            client.subscription_tokens.setdefault(session_id, set()).add(token)
             client.subscriptions.add(session_id)
             for approval in self.db.all("SELECT a.id,a.kind,a.payload_json FROM approvals a JOIN runs r ON r.id=a.run_id WHERE r.session_id=? AND a.state='pending'", (session_id,)):
                 await self._server_approval(client, session_id, approval["id"], approval["kind"], json.loads(approval["payload_json"]))
             return {"subscribed": True}
         if method == "sync.since":
             return self._sync(params)
+        if method == "sync.unsubscribe":
+            session_id = required(params, "sessionId")
+            token = required(params, "subscriptionId") if "subscriptionId" in params else session_id
+            tokens = client.subscription_tokens.get(session_id, {session_id} if session_id in client.subscriptions else set())
+            tokens.discard(token)
+            if tokens:
+                client.subscription_tokens[session_id] = tokens
+            else:
+                client.subscription_tokens.pop(session_id, None)
+                client.subscriptions.discard(session_id)
+                client.server_requests = {key: owner for key, owner in client.server_requests.items() if owner[0] != session_id}
+            return {"unsubscribed": True}
         if method == "event.blob":
             return self._blob(params)
-        if method in {"device.register", "device.tunnel.ready", "device.list", "session.fork", "run.stopTask", "run.setModel", "run.setPermissionMode", "run.setEffort", "run.compact"}:
+        if method == "device.register":
+            if params.get("deviceId", client.device_id) != client.device_id:
+                raise fail("E_TARGET", method, "Device identity does not match the control connection")
+            device = self.db.one("SELECT os FROM devices WHERE id=?", (client.device_id,))
+            return await self.devices.register(client.device_id, client, device["os"])
+        if method == "device.tunnel.ready":
+            if params.get("deviceId", client.device_id) != client.device_id:
+                raise fail("E_TARGET", method, "Device identity does not match the control connection")
+            return await self.devices.ready(client.device_id, client, params)
+        if method in {"device.tunnel.close", "device.offline"}:
+            await self.devices.offline(client.device_id, client)
+            return {"state": "closed"}
+        if method == "device.list":
+            return [{**device, "state": self.devices.entries.get(device["id"], {}).get("state", "closed")} for device in self.db.all("SELECT id,name,os,online,last_seen_at AS lastSeenAt FROM devices")]
+        if method in {"session.fork", "run.stopTask", "run.setModel", "run.setPermissionMode", "run.setEffort", "run.compact"}:
             raise fail("E_CAPABILITY", method, "This capability is unavailable", "Use the supported desktop or native CLI workflow")
         raise fail("E_METHOD_NOT_FOUND", "request.dispatch", "Unknown method", "Use a method supported by this Host")
 
@@ -305,21 +413,42 @@ class HostService:
             events.append(event)
         return events
 
-    def _upsert_project(self, params: dict[str, Any]) -> dict[str, Any]:
+    def _upsert_project(self, params: dict[str, Any], client: Client) -> dict[str, Any]:
         project_id = required(params, "id")
-        path = Path(required(params, "path")).expanduser()
-        if params.get("kind", "remote") != "remote":
-            raise fail("E_CAPABILITY", "project.upsert", "Local projects require an execution device")
-        if not path.is_absolute() or not path.is_dir():
-            raise fail("E_NOT_FOUND", "project.upsert", "Remote project directory does not exist", "Create or select an existing directory")
-        path_text = str(path.resolve())
+        kind = params.get("kind", "remote")
+        raw_path = required(params, "path")
+        device_id = None
+        native_root = None
+        if kind == "local":
+            device_id = params.get("deviceId", client.device_id)
+            if device_id != client.device_id:
+                raise fail("E_TARGET", "project.upsert", "Local project belongs to another device")
+            device = self.db.one("SELECT os FROM devices WHERE id=?", (device_id,))
+            if device["os"] == "windows":
+                if not ntpath.isabs(raw_path) or not ntpath.splitdrive(raw_path)[0]:
+                    raise fail("E_INVALID_PARAMS", "project.upsert", "Local Windows project path must be absolute")
+                path_text = ntpath.normcase(ntpath.normpath(raw_path.replace("/", "\\")))
+            else:
+                if not os.path.isabs(raw_path):
+                    raise fail("E_INVALID_PARAMS", "project.upsert", "Local project path must be absolute")
+                path_text = os.path.normpath(raw_path)
+            native = self.home / "native" / project_key(device_id, path_text, device["os"])
+            native.mkdir(parents=True, exist_ok=True, mode=0o700)
+            native_root = str(native)
+        elif kind == "remote":
+            path = Path(raw_path).expanduser()
+            if not path.is_absolute() or not path.is_dir():
+                raise fail("E_NOT_FOUND", "project.upsert", "Remote project directory does not exist", "Create or select an existing directory")
+            path_text = str(path.resolve())
+        else:
+            raise fail("E_INVALID_PARAMS", "project.upsert", "Unknown project kind")
         name = required(params, "name")
         if len(name) > 256:
             raise fail("E_INVALID_PARAMS", "project.upsert", "Project name is too long")
-        existing = self.db.one("SELECT path FROM projects WHERE id=?", (project_id,))
-        if existing and existing["path"] != path_text:
+        existing = self.db.one("SELECT path,kind,device_id FROM projects WHERE id=?", (project_id,))
+        if existing and (existing["path"], existing["kind"], existing["device_id"]) != (path_text, kind, device_id):
             raise fail("E_CONFLICT", "project.upsert", "Project path is immutable", "Register a separate project")
-        self.db.execute("INSERT INTO projects(id,path,display_name,default_agent,created_at) VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET display_name=excluded.display_name,default_agent=excluded.default_agent", (project_id, path_text, name, params.get("defaultAgent"), now()))
+        self.db.execute("INSERT INTO projects(id,kind,device_id,path,native_root,display_name,default_agent,created_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET display_name=excluded.display_name,default_agent=excluded.default_agent", (project_id, kind, device_id, path_text, native_root, name, params.get("defaultAgent"), now()))
         self.db.commit()
         return self._project(project_id)
 
@@ -331,7 +460,7 @@ class HostService:
         adapter = self.adapters.get(agent)
         if not adapter:
             raise fail("E_AGENT_NOT_INSTALLED", "session.create", "Agent is not configured", "Install or enable the Agent")
-        capabilities = await adapter.capabilities()
+        capabilities = await self._agent_capability(agent)
         if not capabilities.get("installed", capabilities.get("available")):
             raise fail("E_AGENT_NOT_INSTALLED", "session.create", "Agent is not installed", "Install the Agent from Environment")
         if not capabilities.get("loggedIn", False):
@@ -354,15 +483,16 @@ class HostService:
         self.db.commit()
         return self._session(session_id)
 
-    async def _delete_session(self, session: dict[str, Any]) -> dict[str, Any]:
+    async def _delete_session(self, session: dict[str, Any], *, native_missing: bool = False) -> dict[str, Any]:
         if self.db.one("SELECT id FROM runs WHERE session_id=? AND finished_at IS NULL", (session["id"],)):
             raise fail("E_SESSION_BUSY", "session.delete", "Session has an active run", "Stop the run before deleting")
+        if session["agent"] != "fake" and not native_missing:
+            self.db.execute("UPDATE sessions SET archived_at=?,updated_at=? WHERE id=?", (now(), now(), session["id"]))
+            self.db.commit()
+            return {"archived": True}
         adapter = self.adapters.get(session["agent"])
-        delete = getattr(adapter, "delete_session", None)
-        if session.get("nativeId"):
-            if delete is None:
-                raise fail("E_CAPABILITY", "session.delete", "Native session deletion is unsupported", "Delete the native record through the official CLI")
-            await delete(session)
+        if session["agent"] == "fake" and session.get("nativeId"):
+            await adapter.delete_session(session)
         session_id = session["id"]
         self.db.execute("DELETE FROM event_blobs WHERE session_id=?", (session_id,))
         self.db.execute("DELETE FROM events WHERE session_id=?", (session_id,))
@@ -373,16 +503,20 @@ class HostService:
         self.db.commit()
         return {"deleted": True}
 
-    async def _send(self, client: Client, params: dict[str, Any]) -> dict[str, Any]:
+    async def _send(self, client: Client, params: dict[str, Any], capabilities: dict[str, Any], native_exists: bool) -> dict[str, Any]:
         session_id = required(params, "sessionId")
         client_msg_id = required(params, "clientMsgId")
         text = required(params, "text")
         session = self._session(session_id)
+        if session["kind"] == "local" and session["deviceId"] != client.device_id:
+            raise fail("E_TARGET", "run.send", "Local project belongs to another device")
         existing = self.db.one("SELECT * FROM client_msgs WHERE client_msg_id=?", (client_msg_id,))
         if existing:
             if existing["session_id"] != session_id:
                 raise fail("E_CONFLICT", "run.send", "Message belongs to another session", "Generate a new clientMsgId")
             return {"runId": existing["run_id"], "clientMsgId": client_msg_id, "accepted": True}
+        if session["archived"]:
+            raise fail("E_CONFLICT", "run.send", "Session is archived", "Restore the session before sending input")
         if self.draining_until > asyncio.get_running_loop().time():
             raise fail("E_HOST_DRAINING", "run.send", "Host is preparing maintenance", "Retry after maintenance completes")
         if self.db.one("SELECT id FROM runs WHERE session_id=? AND finished_at IS NULL", (session_id,)):
@@ -390,14 +524,23 @@ class HostService:
         adapter = self.adapters.get(session["agent"])
         if not adapter:
             raise fail("E_AGENT_NOT_INSTALLED", "run.send", "Agent is not installed")
-        capabilities = await adapter.capabilities()
         if not capabilities.get("loggedIn", False):
             raise fail("E_NOT_LOGGED_IN", "run.send", "Agent is not logged in", "Complete official CLI login")
-        if session.get("nativeId") and not await adapter.native_exists(session):
+        if not capabilities.get("available", False):
+            raise fail("E_CAPABILITY", "run.send", "Agent is unavailable", str(capabilities.get("reason", "Check Environment")))
+        if not native_exists:
             raise fail("E_NATIVE_MISSING", "run.resume", "Native session record is missing", "Start a new session; UI history cannot restore native context")
+        session["_capabilities"] = capabilities
+        session["_nativeExistsChecked"] = True
         if "script" in params and session["agent"] != "fake":
             raise fail("E_INVALID_PARAMS", "run.send", "Scripts are supported only by FakeAdapter")
+        if session["kind"] == "local":
+            self.devices.require_ready(session["deviceId"], client)
+            device = self.db.one("SELECT os FROM devices WHERE id=?", (session["deviceId"],))
+            config = self.devices.session_config(session_id, session["deviceId"])
+            session.update(deviceInstructions=instructions(config, device["os"], session["projectPath"]), deviceRoot=str(self.devices.entry(session["deviceId"])), sessionConfig=str(config))
         run_id = f"run_{uuid.uuid4().hex}"
+        self.db.reserve_seq(2)
         message_seq = self.db.next_seq()
         started_seq = self.db.next_seq()
         try:
@@ -434,6 +577,41 @@ class HostService:
             raise
         return {"runId": run_id, "clientMsgId": client_msg_id, "accepted": True}
 
+    async def _append(self, client: Client, params: dict[str, Any]) -> dict[str, Any]:
+        session_id, run_id = required(params, "sessionId"), required(params, "runId")
+        message_id, text = required(params, "clientMsgId"), required(params, "text")
+        session = self._session(session_id)
+        if session["kind"] == "local" and session["deviceId"] != client.device_id:
+            raise fail("E_TARGET", "run.append", "Local project belongs to another device")
+        previous = self.db.one("SELECT session_id,run_id FROM client_msgs WHERE client_msg_id=?", (message_id,))
+        if previous:
+            if (previous["session_id"], previous["run_id"]) != (session_id, run_id):
+                raise fail("E_CONFLICT", "run.append", "Message belongs to another run")
+            return {"accepted": True, "clientMsgId": message_id}
+        if session["kind"] == "local":
+            self.devices.require_ready(session["deviceId"], client)
+        row = self.db.one("SELECT id FROM runs WHERE id=? AND session_id=? AND finished_at IS NULL", (run_id, session_id))
+        if not row or run_id not in self.handles:
+            raise fail("E_NOT_FOUND", "run.append", "Active run does not exist")
+        adapter, handle = self.handles[run_id]
+        # Persist acceptance before delivering input; retries never send it twice.
+        seq = self.db.next_seq()
+        try:
+            self.db.execute("INSERT INTO client_msgs VALUES(?,?,?,?)", (message_id, session_id, run_id, now()))
+            event = self._record(session_id, run_id, "user.message", {"text": text, "clientMsgId": message_id, "append": True}, seq=seq, commit=False)
+            self.db.commit()
+        except Exception:
+            self.db.connection.rollback()
+            raise
+        await self._broadcast(event)
+        try:
+            await adapter.append_input(handle, text)
+        except Exception as error:
+            handle.task.cancel()
+            await self._finish(session_id, run_id, "failed", error)
+            raise
+        return {"accepted": True, "clientMsgId": message_id}
+
     async def _watch(self, session_id: str, run_id: str, task: asyncio.Task) -> None:
         try:
             await task
@@ -445,10 +623,14 @@ class HostService:
             await self._finish(session_id, run_id, "completed")
 
     async def _finish(self, session_id: str, run_id: str, state: str, error: Exception | None = None) -> None:
+        run = self.db.one("SELECT finished_at FROM runs WHERE id=?", (run_id,))
+        if not run or run["finished_at"] is not None:
+            return
+        pending = self.db.all("SELECT id FROM approvals WHERE run_id=? AND state='pending'", (run_id,))
+        self.db.reserve_seq(len(pending) + len(self.snapshots) + 2)
         self.handles.pop(run_id, None)
         self.db.execute("UPDATE runs SET state=?,finished_at=? WHERE id=?", (state, now(), run_id))
         self.db.execute("UPDATE sessions SET status='idle',updated_at=? WHERE id=?", (now(), session_id))
-        pending = self.db.all("SELECT id FROM approvals WHERE run_id=? AND state='pending'", (run_id,))
         for approval in pending:
             approval_id = approval["id"]
             decision = {"behavior": "deny"}
@@ -466,6 +648,9 @@ class HostService:
         await self.emit(session_id, run_id, "run.finished", {"state": state})
 
     async def _approve(self, session_id: str, run_id: str, kind: str, payload: dict[str, Any]) -> dict[str, Any]:
+        if len(encoded(payload.get("questions", []))) > MAX_FRAME - 256 * 1024:
+            raise fail("E_APPROVAL_TOO_LARGE", "approval.request", "Question payload exceeds the transport limit", "Reduce the number or size of questions")
+        self.db.reserve_seq(2)
         approval_id = f"apr_{uuid.uuid4().hex}"
         future = asyncio.get_running_loop().create_future()
         self.approval_waiters[approval_id] = future
@@ -485,10 +670,23 @@ class HostService:
     async def _server_approval(self, client: Client, session_id: str, approval_id: str, kind: str, payload: dict[str, Any]) -> None:
         request_id = "approval:" + approval_id
         client.server_requests[request_id] = (session_id, approval_id)
+        approval = self.db.one("SELECT a.* FROM approvals a JOIN runs r ON r.id=a.run_id WHERE a.id=? AND r.session_id=? AND a.state='pending'", (approval_id, session_id))
         row = self.db.one("SELECT * FROM events WHERE session_id=? AND type='approval.request' AND json_extract(payload_json,'$.approvalId')=? ORDER BY seq DESC LIMIT 1", (session_id, approval_id))
-        if not row:
+        if not row or not approval:
             return
         params = self.db.event(row)
+        full = {**json.loads(approval["payload_json"]), "approvalId": approval_id, "kind": approval["kind"]}
+        if len(encoded(full)) <= MAX_EVENT:
+            params["payload"] = full
+        else:
+            summary = {"approvalId": approval_id, "kind": approval["kind"], "truncated": True, "originalBytes": len(encoded(full)), "blob": True}
+            for key in ("tool", "input", "text", "output", "name"):
+                if key in full:
+                    value = full[key]
+                    summary[key] = value[:16000] if isinstance(value, str) else encoded(value)[:16000].decode("utf-8", errors="ignore")
+            if "questions" in full:
+                summary["questions"] = full["questions"]
+            params["payload"] = summary
         try:
             await client.send({"jsonrpc": "2.0", "id": request_id, "method": "approval.request", "params": params})
         except ConnectionError:
@@ -533,6 +731,7 @@ class HostService:
             raise error
         for subscriber in tuple(self.clients):
             subscriber.server_requests.pop("approval:" + approval_id, None)
+        self.db.reserve_seq(2)
         self.db.execute("UPDATE approvals SET state='resolved',decision_json=?,decided_by_device=?,decided_at=? WHERE id=? AND state='pending'", (json.dumps(decision), client.device_id, now(), approval_id))
         self.db.execute("UPDATE runs SET state='running' WHERE id=?", (row["run_id"],))
         self.db.execute("UPDATE sessions SET status='running' WHERE id=?", (session_id,))
@@ -607,7 +806,33 @@ class HostService:
                 end += 1
         return {"text": content[offset:end].decode("utf-8"), "offset": offset, "nextOffset": end, "total": len(content), "hasMore": end < len(content)}
 
+    async def _device_state(self, device_id: str, state: str, reason: str | None) -> None:
+        for session in self.db.all("SELECT s.id FROM sessions s JOIN projects p ON p.id=s.project_id WHERE p.kind='local' AND p.device_id=? AND s.deleted_at IS NULL", (device_id,)):
+            await self.emit(session["id"], None, "device.state", {"deviceId": device_id, "state": state, "reason": reason, "waitTimeout": self.devices.wait_timeout, "grace": self.devices.grace})
+
+    async def _device_interrupt(self, device_id: str) -> None:
+        if self.devices.entries.get(device_id, {}).get("state") == "ready":
+            return
+        runs = self.db.all("SELECT r.id,r.session_id FROM runs r JOIN sessions s ON s.id=r.session_id JOIN projects p ON p.id=s.project_id WHERE p.kind='local' AND p.device_id=? AND r.finished_at IS NULL", (device_id,))
+        for run in runs:
+            self.db.execute("UPDATE runs SET stop_reason='device_grace_expired' WHERE id=?", (run["id"],))
+            self.db.commit()
+            active = self.handles.get(run["id"])
+            if active:
+                await active[0].stop(active[1])
+            else:
+                await self._finish(run["session_id"], run["id"], "interrupted")
+
     async def close(self) -> None:
+        await self.devices.close()
+        for task in self.capability_tasks.values():
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*self.capability_tasks.values(), return_exceptions=True)
+        for adapter in self.adapters.values():
+            close = getattr(adapter, "close", None)
+            if close:
+                await close()
         for _, handle in tuple(self.handles.values()):
             handle.task.cancel()
         if self.watchers:

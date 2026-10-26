@@ -24,7 +24,7 @@ CREATE TABLE event_blobs(seq INTEGER PRIMARY KEY, session_id TEXT NOT NULL, cont
 CREATE TABLE approvals(id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(id), kind TEXT NOT NULL, payload_json TEXT NOT NULL, state TEXT NOT NULL, decision_json TEXT, decided_by_device TEXT, decided_at TEXT);
 CREATE TABLE devices(id TEXT PRIMARY KEY, name TEXT NOT NULL, os TEXT NOT NULL, last_seen_at TEXT NOT NULL, online INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE client_msgs(client_msg_id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id), run_id TEXT NOT NULL REFERENCES runs(id), accepted_at TEXT NOT NULL);
-"""]
+""", "ALTER TABLE sessions ADD COLUMN archived_at TEXT;"]
 
 
 class Database:
@@ -44,8 +44,20 @@ class Database:
         self.connection.commit()
         # Reserve ranges durably before exposing events. After a restart any
         # unused tail is skipped, so online-only deltas never reuse a sequence.
-        self._seq = int(self.connection.execute("SELECT value FROM meta WHERE key='seq'").fetchone()[0])
+        self._seq = max(int(self.connection.execute("SELECT value FROM meta WHERE key='seq'").fetchone()[0]), self.connection.execute("SELECT COALESCE(MAX(seq),0) FROM events").fetchone()[0])
         self._reserved_seq = self._seq
+        self._allocator = sqlite3.connect(path)
+
+    def reserve_seq(self, count: int = 1) -> None:
+        if self._seq + count <= self._reserved_seq:
+            return
+        if self.connection.in_transaction:
+            raise RuntimeError("Reserve event sequences before starting a business transaction")
+        reserved = self._seq + max(count, 1024)
+        # This separate transaction cannot be rolled back by a failed run.accept.
+        self._allocator.execute("UPDATE meta SET value=? WHERE key='seq'", (str(reserved),))
+        self._allocator.commit()
+        self._reserved_seq = reserved
 
     @property
     def host_id(self) -> str:
@@ -56,10 +68,8 @@ class Database:
         return self._seq
 
     def next_seq(self) -> int:
+        self.reserve_seq()
         self._seq += 1
-        if self._seq > self._reserved_seq:
-            self._reserved_seq = self._seq + 1023
-            self.connection.execute("UPDATE meta SET value=? WHERE key='seq'", (str(self._reserved_seq),))
         return self._seq
 
     def execute(self, query: str, args: tuple = ()) -> sqlite3.Cursor:
@@ -77,6 +87,7 @@ class Database:
 
     def close(self) -> None:
         self.connection.close()
+        self._allocator.close()
 
     def prune_events(self, retention_days: int = 180) -> None:
         if retention_days == 0:

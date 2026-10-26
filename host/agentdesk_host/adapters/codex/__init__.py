@@ -3,16 +3,18 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 from pathlib import Path
 
 from ..base import AdapterError, RunContext, RunHandle
-from ..native_common import capability, command, installed_codex, version_of
+from ..native_common import cached_capabilities, capability, command, installed_codex, version_of
 from ..native_rpc import NativeRpc
 
 
 class CodexAdapter:
     kind = "codex"
+    local_execution_policy = {"sandbox": "workspace-write", "networkAccess": True, "version": 1}
 
     def __init__(self, executable: str | None = None):
         self.executable = executable
@@ -22,9 +24,10 @@ class CodexAdapter:
     def path(self):
         return self.executable or installed_codex()
 
+    @cached_capabilities
     async def capabilities(self) -> dict:
         now = asyncio.get_running_loop().time()
-        if self._caps and now - self._checked_at < 10:
+        if self._caps and now - self._checked_at < 600:
             return dict(self._caps)
         executable = self.path()
         result = capability()
@@ -87,27 +90,28 @@ class CodexAdapter:
                 raise
 
     async def start_run(self, session: dict, input: dict, ctx: RunContext) -> RunHandle:
-        caps = await self.capabilities()
+        caps = session.get("_capabilities") or await self.capabilities()
         if not caps["installed"]:
             raise AdapterError("E_AGENT_NOT_INSTALLED", "codex.preflight", "Codex is unavailable", "Install the CLI and its matching resources")
         if not caps["loggedIn"]:
             raise AdapterError("E_NOT_LOGGED_IN", "codex.auth", "Codex is not logged in", "Sign in from the environment page")
         if not caps["available"]:
             raise AdapterError(caps.get("reason") or "E_CAPABILITY", "codex.preflight", "Codex preflight failed", "Check the CLI version, resources and sandbox")
-        if not await self.native_exists(session):
+        if not session.get("_nativeExistsChecked") and not await self.native_exists(session):
             raise AdapterError("E_NATIVE_MISSING", "codex.resume", "Native thread record is missing", "Restore the native thread or create a new session")
         mode = session.get("permissionMode", "default")
         if mode not in ("default", "plan"):
             raise AdapterError("E_CAPABILITY", "codex.permissions", "Unsupported permission mode", "Select default or plan")
-        # M2 remote projects only. M3 permissions must be a separate validated,
-        # versioned contract; never infer high privileges from project text.
-        if session.get("kind", "remote") != "remote":
-            raise AdapterError("E_CAPABILITY", "codex.target", "Local execution is unavailable", "Use a remote project")
+        if session.get("kind") == "local" and (not session.get("deviceRoot") or not session.get("deviceInstructions")):
+            raise AdapterError("E_DEVICE_NOT_READY", "codex.target", "Local execution channel is not prepared")
         native = {"rpc": None, "threadId": None, "turnId": None, "stopping": False}
         return RunHandle(ctx.run_id, asyncio.create_task(self._run(session, input, ctx, native)), native)
 
     async def _run(self, session, input, ctx, native):
         config = ["-c", 'sandbox_mode="read-only"'] if session.get("permissionMode") == "plan" else []
+        if session.get("kind") == "local":
+            # A-02, policy version 1: no user config edits or privilege fallback.
+            config = ["-c", 'sandbox_mode="workspace-write"', "-c", "sandbox_workspace_write.network_access=true", "-c", "sandbox_workspace_write.writable_roots=" + json.dumps([session["deviceRoot"]])]
         async with NativeRpc(self.path(), config) as rpc:
             native["rpc"] = rpc
 
@@ -138,6 +142,8 @@ class CodexAdapter:
                 params["model"] = session["model"]
             if session.get("permissionMode") == "plan":
                 params["sandbox"] = "read-only"
+            if session.get("kind") == "local":
+                params.update(sandbox="workspace-write", developerInstructions=session["deviceInstructions"])
             if session.get("nativeId"):
                 params["threadId"] = session["nativeId"]
                 thread = await rpc.request("thread/resume", params)
@@ -246,9 +252,18 @@ class CodexAdapter:
             raise AdapterError("E_AGENT_NOT_INSTALLED", "codex.login", "Codex CLI is unavailable", "Install the official binary first")
         return [executable, "login", "--device-auth"]
 
+    async def terminal_command(self):
+        return [(await self.login_command())[0]]
+
     async def logout(self):
         args = await self.login_command()
         code, _ = await command([args[0], "logout"])
         if code:
             raise AdapterError("E_AGENT", "codex.logout", "Official logout command failed", "Check the CLI state using the native terminal")
         self._caps = None
+
+    async def close(self):
+        task = getattr(self, "_capability_task", None)
+        if task and not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
