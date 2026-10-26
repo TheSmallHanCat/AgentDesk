@@ -354,10 +354,17 @@ fn dimensions(cols: u32, rows: u32) -> (u32, u32) {
 }
 pub fn command(path: &str, kind: &str) -> AppResult<String> {
     let action = match kind {
+        "login-claude" => "cli=$(\"$HOME/.agentdesk/host/current/venv/bin/python\" -c 'import pathlib,claude_agent_sdk; print(pathlib.Path(claude_agent_sdk.__file__).parent / \"_bundled\" / \"claude\")') || exit 1\nexec \"$cli\" auth login".to_owned(),
+        "login-codex" => "exec \"$HOME/.agentdesk/host/current/bin/codex\" login --device-auth".to_owned(),
         "shell" => "exec \"$shell\" -l".to_owned(),
-        "claude" | "codex" => format!(
-            "case \"${{shell##*/}}\" in\n  csh|tcsh) exec \"$shell\" -ic 'exec {kind}' ;;\n  *) exec \"$shell\" -lic 'exec {kind}' ;;\nesac"
-        ),
+        "claude" | "codex" => {
+            let managed = if kind == "claude" {
+                "if test -x \"$HOME/.agentdesk/host/current/venv/bin/python\"; then\n  cli=$(\"$HOME/.agentdesk/host/current/venv/bin/python\" -c 'import pathlib,claude_agent_sdk; print(pathlib.Path(claude_agent_sdk.__file__).parent / \"_bundled\" / \"claude\")') || exit 1\n  if test -x \"$cli\"; then exec \"$cli\"; fi\nfi"
+            } else {
+                "if test -x \"$HOME/.agentdesk/host/current/bin/codex\"; then exec \"$HOME/.agentdesk/host/current/bin/codex\"; fi"
+            };
+            format!("{managed}\ncase \"${{shell##*/}}\" in\n  csh|tcsh) exec \"$shell\" -ic 'exec {kind}' ;;\n  *) exec \"$shell\" -lic 'exec {kind}' ;;\nesac")
+        }
         _ => return Err(AppError::new("E_INPUT", "pty", "Unknown terminal kind")),
     };
     // Only /bin/sh parses this script. The final interactive program remains the

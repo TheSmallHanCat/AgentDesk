@@ -15,6 +15,7 @@ from e2e_common import PRIVATE, ROOT, configured, save_result
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--filter", default="real_", help="Rust test name substring")
+    parser.add_argument("--suite", default="real_server", choices=("real_server", "real_host"))
     args = parser.parse_args()
     if not configured():
         return 0
@@ -35,7 +36,7 @@ def main() -> int:
             if agent_added:
                 environment["AGENTDESK_E2E_AGENT"] = "1"
         process = subprocess.Popen(
-            ["cargo", "test", "--locked", "--manifest-path", "src-tauri/Cargo.toml", "--test", "real_server", args.filter, "--", "--ignored", "--nocapture", "--test-threads=1"],
+            ["cargo", "test", "--locked", "--manifest-path", "src-tauri/Cargo.toml", "--test", args.suite, args.filter, "--", "--ignored", "--nocapture", "--test-threads=1"],
             cwd=ROOT, env=environment, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, encoding="utf-8", errors="replace",
         )
@@ -50,7 +51,7 @@ def main() -> int:
                         raise RuntimeError("Unexpected protected value in test output")
                     print(safe, flush=True)
                     result[field].append(safe[len(prefix):].strip())
-            if "error[" in line or "Operation failed:" in line or "panicked at" in line or "test result:" in line or "Product download failed:" in line:
+            if "error[" in line or "Operation failed:" in line or "M2 failed:" in line or "panicked at" in line or "test result:" in line or "Product download failed:" in line:
                 errors.append(line.strip())
         result["exitCode"] = process.wait()
         # Rust compiler and panic locations only; never retain arbitrary payloads.

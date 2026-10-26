@@ -24,7 +24,7 @@ impl Db {
         let version: u32 = conn
             .pragma_query_value(None, "user_version", |r| r.get(0))
             .map_err(db_error)?;
-        if version > 1 {
+        if version > 4 {
             return Err(AppError::new(
                 "E_DB_VERSION",
                 "database",
@@ -39,12 +39,142 @@ impl Db {
                 PRAGMA user_version=1;").map_err(db_error)?;
             tx.commit().map_err(db_error)?;
         }
+        if version < 2 {
+            let tx = conn.transaction().map_err(db_error)?;
+            tx.execute_batch("CREATE TABLE host_identities(connection_id TEXT PRIMARY KEY REFERENCES connections(id) ON DELETE CASCADE, host_id TEXT NOT NULL);
+                CREATE TABLE desktop_identity(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                PRAGMA user_version=2;").map_err(db_error)?;
+            tx.commit().map_err(db_error)?;
+        }
+        if version < 3 {
+            let tx = conn.transaction().map_err(db_error)?;
+            tx.execute_batch("CREATE TABLE host_sessions(session_id TEXT NOT NULL, project_id TEXT NOT NULL REFERENCES projects(id), connection_id TEXT NOT NULL REFERENCES connections(id), PRIMARY KEY(connection_id,session_id)); PRAGMA user_version=3;").map_err(db_error)?;
+            tx.commit().map_err(db_error)?;
+        }
+        if version < 4 {
+            let tx = conn.transaction().map_err(db_error)?;
+            tx.execute_batch("CREATE TABLE drafts(connection_id TEXT NOT NULL, session_id TEXT NOT NULL, text TEXT NOT NULL, PRIMARY KEY(connection_id,session_id)); PRAGMA user_version=4;").map_err(db_error)?;
+            tx.commit().map_err(db_error)?;
+        }
         Ok(Self {
             conn: Mutex::new(conn),
         })
     }
     fn lock(&self) -> AppResult<MutexGuard<'_, rusqlite::Connection>> {
         self.conn.lock().map_err(db_error)
+    }
+    pub fn device_id(&self) -> AppResult<String> {
+        let conn = self.lock()?;
+        conn.execute(
+            "INSERT OR IGNORE INTO desktop_identity(key,value) VALUES('deviceId',?1)",
+            [uuid::Uuid::new_v4().to_string()],
+        )
+        .map_err(db_error)?;
+        conn.query_row(
+            "SELECT value FROM desktop_identity WHERE key='deviceId'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(db_error)
+    }
+    pub fn draft(&self, target: &Target) -> AppResult<String> {
+        self.validate_target(target)?;
+        let session = target
+            .session_id
+            .as_deref()
+            .ok_or_else(|| AppError::new("E_TARGET", "draft", "Session target required"))?;
+        self.lock()?
+            .query_row(
+                "SELECT text FROM drafts WHERE connection_id=?1 AND session_id=?2",
+                params![target.connection_id, session],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(db_error)
+            .map(|value| value.unwrap_or_default())
+    }
+    pub fn save_draft(&self, target: &Target, text: &str) -> AppResult<()> {
+        self.validate_target(target)?;
+        let session = target
+            .session_id
+            .as_deref()
+            .ok_or_else(|| AppError::new("E_TARGET", "draft", "Session target required"))?;
+        if text.len() > 2 * 1024 * 1024 {
+            return Err(AppError::new("E_LIMIT", "draft", "Draft exceeds 2 MiB"));
+        }
+        self.lock()?.execute("INSERT INTO drafts(connection_id,session_id,text) VALUES(?1,?2,?3) ON CONFLICT(connection_id,session_id) DO UPDATE SET text=excluded.text",params![target.connection_id,session,text]).map_err(db_error)?;
+        Ok(())
+    }
+    pub fn forget_session(&self, target: &Target) -> AppResult<()> {
+        self.validate_target(target)?;
+        let conn = self.lock()?;
+        conn.execute(
+            "DELETE FROM drafts WHERE connection_id=?1 AND session_id=?2",
+            params![target.connection_id, target.session_id],
+        )
+        .map_err(db_error)?;
+        conn.execute(
+            "DELETE FROM host_sessions WHERE connection_id=?1 AND session_id=?2",
+            params![target.connection_id, target.session_id],
+        )
+        .map_err(db_error)?;
+        Ok(())
+    }
+    pub fn record_host(&self, connection_id: &str, host_id: &str) -> AppResult<()> {
+        let conn = self.lock()?;
+        let old: Option<String> = conn
+            .query_row(
+                "SELECT host_id FROM host_identities WHERE connection_id=?1",
+                [connection_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(db_error)?;
+        if old.is_some_and(|value| value != host_id) {
+            return Err(AppError::new(
+                "E_HOST_ID_CHANGED",
+                "host.identity",
+                "Host identity changed; verify the installation before reconnecting",
+            ));
+        }
+        conn.execute(
+            "INSERT OR IGNORE INTO host_identities(connection_id,host_id) VALUES(?1,?2)",
+            params![connection_id, host_id],
+        )
+        .map_err(db_error)?;
+        Ok(())
+    }
+    pub fn same_host_connections(&self, connection_id: &str) -> AppResult<Vec<String>> {
+        let conn = self.lock()?;
+        let mut statement = conn.prepare("SELECT connection_id FROM host_identities WHERE host_id=(SELECT host_id FROM host_identities WHERE connection_id=?1) AND connection_id<>?1 ORDER BY connection_id").map_err(db_error)?;
+        let rows = statement
+            .query_map([connection_id], |row| row.get(0))
+            .map_err(db_error)?;
+        rows.map(|row| row.map_err(db_error)).collect()
+    }
+    pub fn register_session(&self, target: &Target, session: &serde_json::Value) -> AppResult<()> {
+        let id = session["id"]
+            .as_str()
+            .ok_or_else(|| AppError::new("E_PROTOCOL", "session.register", "Session id missing"))?;
+        let project = session["projectId"].as_str().ok_or_else(|| {
+            AppError::new("E_PROTOCOL", "session.register", "Session project missing")
+        })?;
+        if target.project_id.as_deref() != Some(project) {
+            return Err(AppError::new(
+                "E_TARGET",
+                "session.register",
+                "Session belongs to another project",
+            ));
+        }
+        self.validate_target(&Target {
+            session_id: None,
+            ..target.clone()
+        })?;
+        self.lock()?.execute("INSERT OR IGNORE INTO host_sessions(session_id,project_id,connection_id) VALUES(?1,?2,?3)", params![id,project,target.connection_id]).map_err(db_error)?;
+        self.validate_target(&Target {
+            session_id: Some(id.into()),
+            ..target.clone()
+        })
     }
     pub fn connections(&self) -> AppResult<Vec<Connection>> {
         let conn = self.lock()?;
@@ -123,7 +253,12 @@ impl Db {
         if project.id.is_empty()
             || project.name.trim().is_empty()
             || !project.path.starts_with('/')
-            || !["claude", "codex"].contains(&project.default_agent.as_str())
+            || project.default_agent.is_empty()
+            || project.default_agent.len() > 64
+            || !project
+                .default_agent
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
             || !["default", "plan"].contains(&project.permission_mode.as_str())
         {
             return Err(AppError::new(
@@ -152,12 +287,18 @@ impl Db {
         Ok(())
     }
     pub fn validate_target(&self, target: &Target) -> AppResult<()> {
-        if target.session_id.is_some() {
-            return Err(AppError::new(
-                "E_CAPABILITY",
-                "target",
-                "Agent sessions are not available in this milestone",
-            ));
+        if let Some(session) = &target.session_id {
+            let owner: Option<(String, String)> = self.lock()?.query_row("SELECT connection_id,project_id FROM host_sessions WHERE session_id=?1 AND connection_id=?2", params![session,target.connection_id], |row| Ok((row.get(0)?,row.get(1)?))).optional().map_err(db_error)?;
+            if !owner.is_some_and(|(connection, project)| {
+                connection == target.connection_id
+                    && Some(project.as_str()) == target.project_id.as_deref()
+            }) {
+                return Err(AppError::new(
+                    "E_TARGET",
+                    "target",
+                    "Session does not belong to this project and connection",
+                ));
+            }
         }
         self.connection(&target.connection_id)?;
         if let Some(id) = &target.project_id {

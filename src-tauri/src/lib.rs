@@ -31,7 +31,11 @@ pub fn run() {
                     .pointer("/notification/extra/projectId")
                     .and_then(|v| v.as_str())
                     .map(str::to_owned);
-                commands::sys::restore(&notify_handle, project);
+                let session = data
+                    .pointer("/notification/extra/sessionId")
+                    .and_then(|value| value.as_str())
+                    .map(str::to_owned);
+                commands::sys::restore_session(&notify_handle, project, session);
             })?;
             let settings = app
                 .state::<state::AppState>()
@@ -86,6 +90,30 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            commands::env::env_probe,
+            commands::env::env_install_plan,
+            commands::env::env_install_run,
+            commands::env::env_install_cancel,
+            commands::env::host_start,
+            commands::env::host_stop,
+            commands::env::host_status,
+            commands::env::host_rollback,
+            commands::env::agent_login_start,
+            commands::session::session_list,
+            commands::session::session_draft_get,
+            commands::session::session_draft_set,
+            commands::session::session_create,
+            commands::session::session_history,
+            commands::session::session_rename,
+            commands::session::session_delete,
+            commands::session::session_subscribe,
+            commands::session::session_unsubscribe,
+            commands::session::event_blob,
+            commands::session::run_send,
+            commands::session::run_append,
+            commands::session::run_stop,
+            commands::session::approval_respond,
+            commands::session::run_set_option,
             commands::conn::conn_list,
             commands::conn::conn_save,
             commands::conn::conn_delete,

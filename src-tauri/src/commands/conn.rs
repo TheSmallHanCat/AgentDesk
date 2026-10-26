@@ -77,6 +77,7 @@ pub async fn conn_disconnect(
     target: Target,
 ) -> AppResult<Reply<()>> {
     state.ssh.validate_target(&target)?;
+    state.hosts.disconnect(&target.connection_id).await;
     state
         .terminals
         .close_connection(&target.connection_id)

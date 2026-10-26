@@ -82,6 +82,7 @@ pub fn sys_hide(app: tauri::AppHandle) -> AppResult<()> {
 pub async fn sys_exit(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> AppResult<()> {
     state.transfers.shutdown().await?;
     for connection in state.db.connections()? {
+        state.hosts.disconnect(&connection.id).await;
         state.terminals.close_connection(&connection.id).await;
         let target = crate::models::Target {
             connection_id: connection.id,
@@ -102,6 +103,7 @@ pub fn sys_notify(
     title: String,
     body: String,
     project_id: Option<String>,
+    session_id: Option<String>,
 ) -> AppResult<()> {
     let settings = state.storage.settings()?;
     let enabled = match kind.as_str() {
@@ -124,10 +126,18 @@ pub fn sys_notify(
         .title(title)
         .body(body)
         .extra("projectId", project_id)
+        .extra("sessionId", session_id)
         .show()
         .map_err(|e| AppError::io("notification", e))
 }
 pub fn restore(app: &tauri::AppHandle, project_id: Option<String>) {
+    restore_session(app, project_id, None);
+}
+pub fn restore_session(
+    app: &tauri::AppHandle,
+    project_id: Option<String>,
+    session_id: Option<String>,
+) {
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.show();
         let _ = w.unminimize();
@@ -135,7 +145,7 @@ pub fn restore(app: &tauri::AppHandle, project_id: Option<String>) {
     }
     let _ = app.emit(
         "notification-open",
-        serde_json::json!({"projectId":project_id}),
+        serde_json::json!({"projectId":project_id,"sessionId":session_id}),
     );
 }
 pub fn native_label(language: &str, key: &str) -> String {

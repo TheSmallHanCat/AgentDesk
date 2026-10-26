@@ -513,6 +513,31 @@ impl SshManager {
             .map_err(|_| AppError::new("E_TIMEOUT", "channel", "SSH channel open timed out"))?
             .map_err(|e| AppError::io("channel", e))
     }
+    pub async fn open_streamlocal(
+        &self,
+        target: &Target,
+        path: &str,
+    ) -> AppResult<Channel<client::Msg>> {
+        self.validate_target(target)?;
+        super::forward::validate_socket(path)?;
+        let session = self
+            .sessions
+            .lock()
+            .map_err(Self::lock_error)?
+            .get(&target.connection_id)
+            .cloned()
+            .ok_or_else(|| {
+                AppError::new("E_DISCONNECTED", "host", "SSH connection is unavailable")
+            })?;
+        let handle = session.lock().await;
+        tokio::time::timeout(
+            Duration::from_secs(15),
+            handle.channel_open_direct_streamlocal(path),
+        )
+        .await
+        .map_err(|_| AppError::new("E_TIMEOUT", "host", "Host socket connection timed out"))?
+        .map_err(|e| AppError::io("host.socket", e))
+    }
     pub async fn exec(&self, target: &Target, command: &str) -> AppResult<Vec<u8>> {
         let mut channel = self.open_channel(target).await?;
         channel

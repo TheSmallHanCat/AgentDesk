@@ -16,7 +16,12 @@ jobs:
           node-version: 24
           cache: pnpm
       - uses: dtolnay/rust-toolchain@1.96.0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v6
       - run: pnpm install --frozen-lockfile
+      - run: python scripts/build_host_resources.py
       - run: pnpm tauri build
       - name: 计算校验值
         shell: bash

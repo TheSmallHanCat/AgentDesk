@@ -8,5 +8,5 @@
     "windows": [{ "label": "main", "title": "AgentDesk", "width": 1280, "height": 820, "minWidth": 980, "minHeight": 680, "decorations": false }],
     "security": { "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: data:; connect-src ipc: http://ipc.localhost; font-src 'self' data:" }
   },
-  "bundle": { "active": true, "targets": ["nsis"], "shortDescription": "SSH 远程开发工作台", "license": "AGPL-3.0-only", "icon": ["icons/icon.ico", "icons/icon.png"] }
+  "bundle": { "active": true, "targets": ["nsis"], "resources": { "../resources/host/": "resources/host/" }, "shortDescription": "SSH 远程开发工作台", "license": "AGPL-3.0-only", "icon": ["icons/icon.ico", "icons/icon.png"] }
 }

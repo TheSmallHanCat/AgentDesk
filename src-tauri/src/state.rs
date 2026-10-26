@@ -13,6 +13,8 @@ pub struct AppState {
     pub diagnostics: Arc<Diagnostics>,
     pub terminals: Arc<crate::ssh::pty::PtyManager>,
     pub transfers: Arc<crate::ssh::transfer::TransferManager>,
+    pub hosts: Arc<crate::host::client::HostPool>,
+    pub installer: Arc<crate::host::installer::Installer>,
 }
 impl AppState {
     pub fn new(app: tauri::AppHandle) -> AppResult<Self> {
@@ -27,6 +29,7 @@ impl AppState {
             diagnostics.clone(),
             Some(app),
         ));
+        let hosts = Arc::new(crate::host::client::HostPool::new(db.device_id()?));
         Ok(Self {
             db,
             storage,
@@ -34,6 +37,8 @@ impl AppState {
             diagnostics,
             terminals: Arc::default(),
             transfers: Arc::default(),
+            hosts,
+            installer: Arc::default(),
         })
     }
 }

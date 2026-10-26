@@ -13,3 +13,8 @@ __pycache__/
 !.env.example
 test-results/
 .tmp/
+resources/host/*.whl
+resources/host/*.tar.gz
+resources/host/manifest.json
+resources/host/dependencies.txt
+resources/host/python-downloads.json
