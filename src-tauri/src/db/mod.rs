@@ -124,6 +124,7 @@ impl Db {
             || project.name.trim().is_empty()
             || !project.path.starts_with('/')
             || !["claude", "codex"].contains(&project.default_agent.as_str())
+            || !["default", "plan"].contains(&project.permission_mode.as_str())
         {
             return Err(AppError::new(
                 "E_INPUT",
@@ -181,7 +182,9 @@ impl Db {
     pub fn record_dir(&self, id: &str, user: &str, path: &str) -> AppResult<()> {
         let mut conn = self.lock()?;
         let tx = conn.transaction().map_err(db_error)?;
-        tx.execute("INSERT INTO recent_dirs VALUES(?1,?2,?3,?4) ON CONFLICT(connection_id,remote_user,path) DO UPDATE SET used_at=excluded.used_at", params![id,user,path,now() as i64]).map_err(db_error)?;
+        let last:i64=tx.query_row("SELECT COALESCE(MAX(used_at),0) FROM recent_dirs WHERE connection_id=?1 AND remote_user=?2",params![id,user],|row|row.get(0)).map_err(db_error)?;
+        let used_at = (now() as i64).max(last.saturating_add(1));
+        tx.execute("INSERT INTO recent_dirs VALUES(?1,?2,?3,?4) ON CONFLICT(connection_id,remote_user,path) DO UPDATE SET used_at=excluded.used_at", params![id,user,path,used_at]).map_err(db_error)?;
         tx.execute("DELETE FROM recent_dirs WHERE connection_id=?1 AND remote_user=?2 AND path NOT IN (SELECT path FROM recent_dirs WHERE connection_id=?1 AND remote_user=?2 ORDER BY used_at DESC LIMIT 8)", params![id,user]).map_err(db_error)?;
         tx.commit().map_err(db_error)
     }
@@ -226,6 +229,7 @@ mod tests {
             db.record_dir("one", "u", &format!("/dir{n}")).unwrap();
         }
         assert_eq!(db.recent("one", "u").unwrap().len(), 8);
+        assert_eq!(db.recent("one", "u").unwrap()[0], "/dir11");
         assert!(db.recent("one", "other").unwrap().is_empty());
     }
     #[test]

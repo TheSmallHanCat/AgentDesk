@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://agentdesk.dev/protocol/1.0/hello.schema.json",
+  "$id": "urn:agentdesk:protocol:1.0:hello",
   "title": "AgentDesk hello handshake",
   "description": "协议 1.0 的握手样例；此阶段不实现远端 RPC 服务。",
   "$defs": {

@@ -41,3 +41,26 @@ impl Secrets {
         }
     }
 }
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+    struct Cleanup(String);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = Secrets::clear(&self.0, "password");
+        }
+    }
+    #[test]
+    fn windows_credential_store_roundtrip_and_delete() {
+        let id = uuid::Uuid::new_v4().to_string();
+        let _cleanup = Cleanup(id.clone());
+        assert!(Secrets::get(&id, "password").unwrap().is_none());
+        Secrets::set(&id, "password", "fixture-secret").unwrap();
+        assert!(Secrets::get(&id, "password")
+            .unwrap()
+            .as_ref()
+            .is_some_and(|s| s.as_str() == "fixture-secret"));
+        Secrets::clear(&id, "password").unwrap();
+        assert!(Secrets::get(&id, "password").unwrap().is_none());
+    }
+}

@@ -88,12 +88,13 @@ pub async fn dir_complete(
     target: Target,
     path: String,
 ) -> AppResult<Reply<Vec<String>>> {
+    let trailing = path.is_empty() || path.ends_with('/');
     let path = if path.is_empty() {
         "/".into()
     } else {
         sftp::remote_path(&path)?
     };
-    let (directory, prefix) = if path.ends_with('/') {
+    let (directory, prefix) = if trailing {
         (path.clone(), String::new())
     } else {
         let (d, p) = path.rsplit_once('/').unwrap();

@@ -171,8 +171,14 @@ pub async fn fs_rename(
     let s = sftp::session(&state.ssh, &target).await?;
     let result = async {
         protect(&state, &target, &s, &path).await?;
-        if s.symlink_metadata(&new_path).await.is_ok() {
-            return Err(AppError::new("E_EXISTS", "rename", "Destination exists"));
+        match s.symlink_metadata(&new_path).await {
+            Ok(_) => return Err(AppError::new("E_EXISTS", "rename", "Destination exists")),
+            Err(e) => {
+                let error = sftp::error(e);
+                if error.code != "E_NOT_FOUND" {
+                    return Err(error);
+                }
+            }
         }
         s.rename(path, new_path).await.map_err(sftp::error)
     }

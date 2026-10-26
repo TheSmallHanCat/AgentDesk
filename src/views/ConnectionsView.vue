@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ServerOutline } from '@vicons/ionicons5'
 import { open } from '@tauri-apps/plugin-dialog'
@@ -15,8 +15,8 @@ const blank = (): Connection => ({ id: '', name: '', host: '', port: 22, user: '
 const form = reactive<Connection>(blank()); const guard = new RequestGuard()
 const filtered = computed(() => data.connections.filter(c => `${c.name} ${c.host} ${c.user}`.toLowerCase().includes(search.value.toLowerCase())))
 const authOptions = computed(() => ['password', 'key', 'agent'].map(value => ({ value, label: t('connections.' + value) })))
-function edit(c?: Connection, connecting = false) { Object.assign(form, blank(), c); login.value = connecting; credential.value = ''; saveSecret.value = false; error.value = ''; trust.value = undefined; changed.value = undefined; modal.value = true }
-function clean() { credential.value = ''; trust.value = undefined; guard.invalidate() }
+function edit(c?: Connection, connecting = false) { guard.invalidate(); busy.value=false; Object.assign(form, blank(), c); login.value = connecting; credential.value = ''; saveSecret.value = false; error.value = ''; trust.value = undefined; changed.value = undefined; modal.value = true }
+function clean() { if(modal.value)return;credential.value = ''; trust.value = undefined; guard.invalidate(); busy.value=false }
 async function chooseKey() { if (!desktop) return; const path = await open({ multiple: false, directory: false }); if (typeof path === 'string') form.keyPath = path }
 async function save() {
   error.value = ''; busy.value = true
@@ -27,16 +27,16 @@ async function connect() {
   try {
     const reply = await call<Reply<ConnectionStatus>>('conn_connect', { target: request, credential: credential.value || null, saveSecret: saveSecret.value })
     if (!guard.accepts(reply.target)) return
-    const state = unwrap(request, reply); data.statuses[form.id] = state
+    const state = unwrap(request, reply); data.applyState(state)
     if (state.state === 'awaitingTrust') { trust.value = state; return }
     if (state.previousFingerprint) { changed.value = state; credential.value = ''; return }
     if (state.state === 'connected') { modal.value = false; clean(); await data.refresh() }
     else { error.value = state.error ?? t('common.error'); credential.value = '' }
-  } catch (e) { if (guard.current?.requestSeq === request.requestSeq) { error.value = errorText(e); credential.value = '' } } finally { busy.value = false }
+  } catch (e) { if (guard.current?.requestSeq === request.requestSeq) { error.value = errorText(e); credential.value = '' } } finally { if(guard.current?.requestSeq===request.requestSeq)busy.value = false }
 }
 async function confirmTrust() {
-  const request = target(form.id)
-  try { unwrap(request, await call<Reply<null>>('conn_trust_host_key', { target: request, fingerprint: trust.value?.fingerprint })); trust.value = undefined; await connect() } catch (e) { error.value = errorText(e); credential.value = '' }
+  const request = guard.begin(form.id);busy.value=true
+  try { const reply=await call<Reply<null>>('conn_trust_host_key', { target: request, fingerprint: trust.value?.fingerprint });if(!guard.accepts(reply.target))return;unwrap(request,reply);trust.value = undefined; await connect() } catch (e) { if(guard.current?.requestSeq===request.requestSeq){error.value = errorText(e); credential.value = ''} } finally {if(guard.current?.requestSeq===request.requestSeq)busy.value=false}
 }
 async function disconnect(c: Connection) {
   if (!window.confirm(`${t('connections.disconnectHelp')}\n\n${c.name} · ${c.user}@${c.host}:${c.port}`)) return
@@ -47,6 +47,7 @@ async function importConfig() {
   try { const result = await call<{ connections: Connection[]; warnings: string[] }>('conn_import_ssh_config'); if (!result.connections.length) { toast.show(t('common.noData')); return }; for (const connection of result.connections) await call('conn_save', { connection }); await data.refresh(); if (result.warnings.length) toast.show(result.warnings.join('\n')) } catch (e) { toast.show(errorText(e), 'error') }
 }
 onMounted(() => data.refresh().catch(e => toast.show(errorText(e), 'error')))
+onUnmounted(()=>{guard.invalidate();credential.value=''})
 </script>
 <template><section class="page"><div class="page-head"><div><h1>{{ t('connections.title') }}</h1><p class="muted">{{ t('connections.description') }}</p></div><div class="actions"><n-button :disabled="!desktop" @click="importConfig">{{ t('connections.import') }}</n-button><n-button type="primary" :disabled="!desktop" @click="edit()">{{ t('connections.new') }}</n-button></div></div>
 <n-alert v-if="!desktop" type="info" style="margin-bottom: 20px">{{ t('common.desktop') }}</n-alert>

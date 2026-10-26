@@ -15,10 +15,10 @@
 - `Project { id, connectionId, name, path, description, defaultAgent: 'claude'|'codex', defaultModel, permissionMode, pinned: boolean, archived: boolean, lastOpenedAt?: number }`
 - `FileEntry { name, path, kind: 'file'|'directory'|'symlink'|'other', size: number, mtime: number, permissions: number }`
 - `FileDocument { path, content, mtime: number, size: number, permissions: number, lineEnding: 'lf'|'crlf'|'mixed' }`
-- `TerminalFrame { target, terminalId, data: number[], exited: boolean, exitCode?: number }`。数据为字节，避免切断 UTF-8；16ms 或 32KiB 批量。
-- `Transfer { id, target, path, destination, state: 'queued'|'running'|'completed'|'failed'|'cancelled', transferred: number, total: number, speed: number, error?: string }`
+- `TerminalFrame { target, terminalId, data: number[], seq: number, exited: boolean, exitCode?: number }`。数据为字节，避免切断 UTF-8；16ms 或 32KiB 批量。最多 8 个未确认帧，前端写入后 ack。
+- `Transfer { id, target, path, destination, localPath?: string, state: 'queued'|'running'|'completed'|'failed'|'cancelled', transferred: number, total: number, speed: number, error?: string }`。destination 保留下载目录供重试使用，localPath 是成功后的实际文件名。
 - `Diagnostic { connectionId, stage, elapsedMs: number, success: boolean, code?: string, timestamp: number }`，不记录地址、用户名、路径和错误 payload。
-- `Settings { theme: 'system'|'light'|'dark', language: 'zh-CN'|'en', closeAction: 'ask'|'tray'|'exit', scrollback: number, fontSize: number, notifications: { disconnected: boolean, completed: boolean, approval: boolean }, shortcuts: { newTerminal: string, saveFile: string, focusDock: string } }`
+- `Settings { theme: 'system'|'light'|'dark', language: 'zh-CN'|'en', closeAction: 'ask'|'tray'|'exit', scrollback: number, fontSize: number, notifications: { disconnected: boolean, completed: boolean, approval: boolean }, shortcuts: { newTerminal: string, saveFile: string, focusDock: string, closeTab: string, nextTab: string, previousTab: string, split: string } }`
 
 ## invoke
 
@@ -29,15 +29,18 @@
 - `project_list() -> Project[]`; `project_save({project, createDir: boolean}) -> Project`（远端 canonicalize，不存在返回 E_NOT_FOUND；用户确认后 createDir=true）；`project_archive({id, archived}) -> void`。
 - `dir_complete({target, path}) -> Reply<string[]>`; `dir_recent({target}) -> Reply<string[]>`。
 - `term_open({target, path, kind: 'shell'|'claude'|'codex', cols, rows, onOutput: Channel<TerminalFrame>}) -> Reply<{terminalId: string}>`；`term_write({target, terminalId, data: string})` / `term_resize({target, terminalId, cols, rows})` / `term_close({target, terminalId})` 均 Reply<null>。
+- `term_ack({target, terminalId, seq}) -> void`，仅释放对应资源已发送帧的输出额度，重复确认不增加额度。PTY 与 exec 必须先得到服务端确认才报告打开成功。
 - `fs_list({target, path, showHidden}) -> Reply<FileEntry[]>`; `fs_stat({target,path}) -> Reply<FileEntry>`；`fs_read({target,path}) -> Reply<FileDocument>`。
 - `fs_write({target,path,content,expectedMtime,expectedSize,force}) -> Reply<FileDocument>`；`fs_create({target,path})` / `fs_mkdir({target,path})` / `fs_rename({target,path,newPath})` / `fs_delete({target,path})` 均 Reply<null>。删除由 UI 确认完整路径；后端拒绝根路径和项目根目录。
 - `transfer_download({target,path,destination}) -> Reply<{transferId: string}>`（destination 为目录，后端自动避让重名）；`transfer_list() -> Transfer[]`；`transfer_cancel({target,transferId}) -> Reply<null>`；`transfer-state` 事件载荷 Transfer。重试创建新任务。
 - `editor_save_local({path,content}) -> string`（文件选择器确定路径，后端自动避让重名）。
 - `settings_get() -> Settings`; `settings_set({settings}) -> void`。
 - `diag_list() -> Diagnostic[]`; `diag_export({path}) -> string`（仅导出诊断 JSON，不含终端/文件/配置内容，自动避让重名）。
-- `sys_hide() -> void`; `sys_exit() -> void`（前端展示未保存编辑器和终端，确认后调用）；`sys_notify({kind: 'disconnected'|'completed'|'approval', title, body, projectId?: string}) -> void`。
+- `sys_hide() -> void`; `sys_exit() -> void`（前端展示未保存编辑器、终端和传输，确认后调用；后端等待传输清理、关闭 PTY、断开 SSH 后退出）；`sys_notify({kind: 'disconnected'|'completed'|'approval', title, body, projectId?: string}) -> void`。
 - 后端收到系统关闭/托盘退出请求，emit `app-close-requested`，载荷 `{ forceExit: boolean }`；由前端执行同一确认流程。通知点击 emit `notification-open`，载荷 `{ projectId?: string }`，并恢复窗口。
 
 ## 阶段约束
 
 只建 Python 包和 hello 类型，不提供 Host 业务。M1 项目索引暂存桌面 SQLite；`sessionId` 应为空。未实现页面显示有意义的空状态，无假按钮。浏览器开发模式显示桌面能力说明，不伪造连接成功。
+
+已有项目索引的连接不允许修改 host/port/user；应新建连接，避免把已有工作目标隐式指向另一台服务器。项目创建后目录和连接归属固定，显示属性可以修改。默认审批仅保存 default/plan，不启用高权限绕过。

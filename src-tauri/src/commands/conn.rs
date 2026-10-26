@@ -28,6 +28,19 @@ pub fn conn_save(
     connection.host = host;
     connection.user = user;
     connection.port = port;
+    if let Ok(existing) = state.db.connection(&connection.id) {
+        if (existing.host != connection.host
+            || existing.port != connection.port
+            || existing.user != connection.user)
+            && state
+                .db
+                .projects()?
+                .iter()
+                .any(|p| p.connection_id == connection.id)
+        {
+            return Err(AppError::new("E_TARGET","connection","This connection owns project indexes. Add another connection to change its host, port or user without redirecting existing projects"));
+        }
+    }
     state.db.save_connection(&connection)?;
     Ok(connection)
 }

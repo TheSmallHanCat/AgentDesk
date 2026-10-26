@@ -189,5 +189,13 @@
   "close.unsaved": "Unsaved files",
   "close.terminals": "Terminals",
   "notifications.lostTitle": "SSH connection lost",
-  "notifications.lostBody": "Reconnecting. Existing terminals will not be recreated."
+  "notifications.lostBody": "Reconnecting. Existing terminals will not be recreated.",
+  "tray.open": "Open AgentDesk",
+  "tray.exit": "Exit",
+  "settings.closeTab": "Close work tab",
+  "settings.nextTab": "Next tab",
+  "settings.previousTab": "Previous tab",
+  "settings.split": "Add split",
+  "projects.approvalDefault": "Request approval",
+  "projects.approvalPlan": "Read-only planning"
 }

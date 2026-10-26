@@ -10,6 +10,8 @@ export type WorkTab = TerminalTab | EditorTab
 export const useWorkspaceStore = defineStore('workspace', () => {
   const tabs = ref<WorkTab[]>([]); const panes = ref<string[]>([]); const activePane = ref(0); const dockOpen = ref(false); const focus = ref(false); const saveRequested = ref(0)
   const projectId = ref(''); const ratioX = ref(50); const ratioY = ref(50); const dockHeight = ref(320)
+  const closeRequested = ref(0); const splitRequested = ref(0)
+  function switchTab(direction:number) { const index=tabs.value.findIndex(t=>t.id===panes.value[activePane.value]); if(tabs.value.length)select(tabs.value[(index+direction+tabs.value.length)%tabs.value.length].id) }
   function select(id: string) {
     const other = panes.value.indexOf(id)
     if (other >= 0) activePane.value = other
@@ -39,5 +41,5 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   }
   function split() { if (panes.value.length >= 4) return; const candidate = tabs.value.find(t => !panes.value.includes(t.id)); if (candidate) { panes.value.push(candidate.id); activePane.value = panes.value.length-1; focus.value = true; dockOpen.value = true } }
   function unsplit() { if (panes.value.length > 1) { panes.value.splice(activePane.value,1); activePane.value = Math.max(0,activePane.value-1) } }
-  return { tabs, panes, activePane, dockOpen, focus, saveRequested, projectId, ratioX, ratioY, dockHeight, select, openTerminal, openFile, closeTab, split, unsplit }
+  return { tabs, panes, activePane, dockOpen, focus, saveRequested, projectId, ratioX, ratioY, dockHeight, closeRequested, splitRequested, select, openTerminal, openFile, closeTab, split, unsplit, switchTab }
 })

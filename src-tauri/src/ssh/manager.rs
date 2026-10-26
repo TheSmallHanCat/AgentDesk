@@ -246,8 +246,8 @@ impl SshManager {
             tokio::net::TcpStream::connect((connection.host.as_str(), connection.port)),
         )
         .await
-        .map_err(|_| AppError::new("E_TIMEOUT", "tcp", "SSH connection timed out"))?
-        .map_err(|e| AppError::io("tcp", e));
+        .map_err(|_| AppError::new("E_TIMEOUT", "tcp", "SSH connection timed out"))
+        .and_then(|result| result.map_err(|e| AppError::io("tcp", e)));
         self.diag.record(
             &connection.id,
             "tcp",
@@ -275,7 +275,15 @@ impl SshManager {
             client::connect_stream(config, socket, handler),
         )
         .await
-        .map_err(|_| AppError::new("E_TIMEOUT", "host-key", "SSH handshake timed out"))?;
+        .map_err(|_| AppError::new("E_TIMEOUT", "host-key", "SSH handshake timed out"))
+        .inspect_err(|e| {
+            self.diag.record(
+                &connection.id,
+                "host-key",
+                start.elapsed().as_millis() as u64,
+                Some(&e.code),
+            )
+        })?;
         let mut status = ConnectionStatus::new(&connection.id, "connected");
         {
             let mut observed = observed.lock().map_err(Self::lock_error)?;
@@ -312,7 +320,14 @@ impl SshManager {
             &connection.id,
             "host-key",
             start.elapsed().as_millis() as u64,
-            status.error.as_deref(),
+            status
+                .error
+                .as_deref()
+                .or(if handshake.is_err() && status.state == "connected" {
+                    Some("E_IO")
+                } else {
+                    None
+                }),
         );
         if status.state != "connected" {
             return Ok(status);
@@ -324,13 +339,13 @@ impl SshManager {
             auth::authenticate(&mut handle, connection, credential),
         )
         .await
-        .map_err(|_| {
-            AppError::new(
+        .unwrap_or_else(|_| {
+            Err(AppError::new(
                 "E_TIMEOUT",
                 "authentication",
                 "SSH authentication timed out",
-            )
-        })?;
+            ))
+        });
         self.diag.record(
             &connection.id,
             "authentication",

@@ -12,8 +12,13 @@ pub fn settings_get(state: tauri::State<'_, AppState>) -> AppResult<Settings> {
     state.storage.settings()
 }
 #[tauri::command]
-pub fn settings_set(state: tauri::State<'_, AppState>, settings: Settings) -> AppResult<()> {
-    state.storage.save_settings(&settings)
+pub fn settings_set(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    settings: Settings,
+) -> AppResult<()> {
+    state.storage.save_settings(&settings)?;
+    refresh_tray_menu(&app, &settings.language)
 }
 #[tauri::command]
 pub fn diag_list(state: tauri::State<'_, AppState>) -> AppResult<Vec<Diagnostic>> {
@@ -39,8 +44,20 @@ pub fn sys_hide(app: tauri::AppHandle) -> AppResult<()> {
         .map_err(|e| AppError::io("window", e))
 }
 #[tauri::command]
-pub fn sys_exit(app: tauri::AppHandle) {
+pub async fn sys_exit(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> AppResult<()> {
+    state.transfers.shutdown().await?;
+    for connection in state.db.connections()? {
+        state.terminals.close_connection(&connection.id).await;
+        let target = crate::models::Target {
+            connection_id: connection.id,
+            project_id: None,
+            session_id: None,
+            request_seq: 0,
+        };
+        state.ssh.disconnect(&target).await?;
+    }
     app.exit(0);
+    Ok(())
 }
 #[tauri::command]
 pub fn sys_notify(
@@ -85,4 +102,50 @@ pub fn restore(app: &tauri::AppHandle, project_id: Option<String>) {
         "notification-open",
         serde_json::json!({"projectId":project_id}),
     );
+}
+pub fn native_label(language: &str, key: &str) -> String {
+    static EN: std::sync::OnceLock<std::collections::HashMap<String, String>> =
+        std::sync::OnceLock::new();
+    static ZH: std::sync::OnceLock<std::collections::HashMap<String, String>> =
+        std::sync::OnceLock::new();
+    let catalog = if language == "en" {
+        EN.get_or_init(|| {
+            serde_json::from_str(include_str!("../../../src/i18n/en.json"))
+                .expect("Embedded translations must be valid")
+        })
+    } else {
+        ZH.get_or_init(|| {
+            serde_json::from_str(include_str!("../../../src/i18n/zh-CN.json"))
+                .expect("Embedded translations must be valid")
+        })
+    };
+    catalog
+        .get(key)
+        .cloned()
+        .unwrap_or_else(|| "AgentDesk".into())
+}
+pub fn refresh_tray_menu(app: &tauri::AppHandle, language: &str) -> AppResult<()> {
+    if let Some(tray) = app.tray_by_id("main-tray") {
+        let open = tauri::menu::MenuItem::with_id(
+            app,
+            "open",
+            native_label(language, "tray.open"),
+            true,
+            None::<&str>,
+        )
+        .map_err(|e| AppError::io("tray", e))?;
+        let exit = tauri::menu::MenuItem::with_id(
+            app,
+            "exit",
+            native_label(language, "tray.exit"),
+            true,
+            None::<&str>,
+        )
+        .map_err(|e| AppError::io("tray", e))?;
+        let menu = tauri::menu::Menu::with_items(app, &[&open, &exit])
+            .map_err(|e| AppError::io("tray", e))?;
+        tray.set_menu(Some(menu))
+            .map_err(|e| AppError::io("tray", e))?;
+    }
+    Ok(())
 }

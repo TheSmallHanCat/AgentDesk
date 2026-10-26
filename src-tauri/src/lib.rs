@@ -33,23 +33,22 @@ pub fn run() {
                     .map(str::to_owned);
                 commands::sys::restore(&notify_handle, project);
             })?;
-            let settings = app.state::<state::AppState>().storage.settings()?;
-            let english = settings.language == "en";
+            let settings = app
+                .state::<state::AppState>()
+                .storage
+                .settings()
+                .unwrap_or_default();
             let open = tauri::menu::MenuItem::with_id(
                 app,
                 "open",
-                if english {
-                    "Open AgentDesk"
-                } else {
-                    "打开 AgentDesk"
-                },
+                commands::sys::native_label(&settings.language, "tray.open"),
                 true,
                 None::<&str>,
             )?;
             let exit = tauri::menu::MenuItem::with_id(
                 app,
                 "exit",
-                if english { "Exit" } else { "退出" },
+                commands::sys::native_label(&settings.language, "tray.exit"),
                 true,
                 None::<&str>,
             )?;

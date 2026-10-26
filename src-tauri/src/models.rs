@@ -138,6 +138,10 @@ pub struct ShortcutSettings {
     pub new_terminal: String,
     pub save_file: String,
     pub focus_dock: String,
+    pub close_tab: String,
+    pub next_tab: String,
+    pub previous_tab: String,
+    pub split: String,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -167,6 +171,10 @@ impl Default for ShortcutSettings {
             new_terminal: "Ctrl+Shift+T".into(),
             save_file: "Ctrl+S".into(),
             focus_dock: "Ctrl+Shift+F".into(),
+            close_tab: "Ctrl+Shift+W".into(),
+            next_tab: "Ctrl+PageDown".into(),
+            previous_tab: "Ctrl+PageUp".into(),
+            split: "Ctrl+Alt+S".into(),
         }
     }
 }

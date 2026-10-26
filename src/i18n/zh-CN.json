@@ -189,5 +189,13 @@
   "close.unsaved": "未保存文件",
   "close.terminals": "终端",
   "notifications.lostTitle": "SSH 连接已断开",
-  "notifications.lostBody": "连接正在恢复，原终端不会自动重建。"
+  "notifications.lostBody": "连接正在恢复，原终端不会自动重建。",
+  "tray.open": "打开 AgentDesk",
+  "tray.exit": "退出",
+  "settings.closeTab": "关闭工作标签",
+  "settings.nextTab": "下一个标签",
+  "settings.previousTab": "上一个标签",
+  "settings.split": "新增分屏",
+  "projects.approvalDefault": "按需审批",
+  "projects.approvalPlan": "只读规划"
 }

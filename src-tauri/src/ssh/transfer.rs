@@ -33,6 +33,7 @@ pub struct Transfer {
 struct Job {
     value: Transfer,
     cancel: CancellationToken,
+    done: CancellationToken,
 }
 pub struct TransferManager {
     jobs: Mutex<HashMap<String, Job>>,
@@ -59,8 +60,28 @@ impl TransferManager {
     fn update(&self, app: &tauri::AppHandle, id: &str, change: impl FnOnce(&mut Transfer)) {
         if let Ok(mut jobs) = self.jobs.lock() {
             if let Some(j) = jobs.get_mut(id) {
+                let previous = j.value.state.clone();
                 change(&mut j.value);
                 let _ = app.emit("transfer-state", &j.value);
+                if previous != j.value.state {
+                    let count = jobs
+                        .values()
+                        .filter(|j| matches!(j.value.state.as_str(), "queued" | "running"))
+                        .count();
+                    if let Some(tray) = app.tray_by_id("main-tray") {
+                        let _ = tray.set_tooltip(Some(if count > 0 {
+                            format!("AgentDesk · {count}")
+                        } else {
+                            "AgentDesk".into()
+                        }));
+                        let rgba = if count > 0 {
+                            [208, 171, 112, 255].repeat(32 * 32)
+                        } else {
+                            [63, 112, 212, 255].repeat(32 * 32)
+                        };
+                        let _ = tray.set_icon(Some(tauri::image::Image::new_owned(rgba, 32, 32)));
+                    }
+                }
             }
         }
     }
@@ -85,6 +106,31 @@ impl TransferManager {
                 j.cancel.cancel();
             }
         }
+    }
+    pub async fn shutdown(&self) -> AppResult<()> {
+        let waits = {
+            let jobs = self.jobs.lock().map_err(|e| AppError::io("shutdown", e))?;
+            jobs.values()
+                .filter(|j| matches!(j.value.state.as_str(), "queued" | "running"))
+                .map(|j| {
+                    j.cancel.cancel();
+                    j.done.clone()
+                })
+                .collect::<Vec<_>>()
+        };
+        tokio::time::timeout(Duration::from_secs(20), async {
+            for done in waits {
+                done.cancelled().await;
+            }
+        })
+        .await
+        .map_err(|_| {
+            AppError::new(
+                "E_TIMEOUT",
+                "shutdown",
+                "Transfers are still cleaning up; wait and try exiting again",
+            )
+        })
     }
     pub fn download(
         self: &Arc<Self>,
@@ -112,6 +158,7 @@ impl TransferManager {
         }
         let id = uuid::Uuid::new_v4().to_string();
         let cancel = CancellationToken::new();
+        let done = CancellationToken::new();
         let value = Transfer {
             id: id.clone(),
             target: target.clone(),
@@ -146,6 +193,7 @@ impl TransferManager {
                 Job {
                     value,
                     cancel: cancel.clone(),
+                    done: done.clone(),
                 },
             );
         }
@@ -181,6 +229,7 @@ impl TransferManager {
                     v.speed = 0;
                 }
             });
+            done.cancel();
         });
         Ok(id)
     }

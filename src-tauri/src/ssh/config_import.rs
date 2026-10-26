@@ -22,7 +22,7 @@ pub fn parse(text: &str, home: &str, default_user: &str) -> AppResult<Imported> 
     }];
     let mut warnings = Vec::new();
     let mut skip_match = false;
-    for (n, line) in text.lines().enumerate() {
+    for (n, line) in text.trim_start_matches('\u{feff}').lines().enumerate() {
         let tokens = tokenize(line)
             .map_err(|m| AppError::new("E_SSH_CONFIG", "import", format!("Line {}: {m}", n + 1)))?;
         if tokens.is_empty() {
@@ -151,14 +151,22 @@ fn tokenize(line: &str) -> Result<Vec<String>, &'static str> {
     let mut word = String::new();
     let mut quote = None;
     let mut escaped = false;
-    for c in line.chars() {
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
         if escaped {
             word.push(c);
             escaped = false;
             continue;
         }
         if c == '\\' {
-            escaped = true;
+            if chars
+                .peek()
+                .is_some_and(|next| next.is_whitespace() || ['\\', '\'', '"', '#'].contains(next))
+            {
+                escaped = true;
+            } else {
+                word.push(c);
+            }
             continue;
         }
         if let Some(q) = quote {
@@ -270,6 +278,19 @@ pub fn normalize_endpoint(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn windows_key_paths_and_utf8_bom_are_preserved() {
+        let imported = parse(
+            "\u{feff}Host windows-key\n IdentityFile \"C:\\keys\\id_ed25519\"\n",
+            "/home/test",
+            "fixture",
+        )
+        .unwrap();
+        assert_eq!(
+            imported.connections[0].key_path.as_deref(),
+            Some(r"C:\keys\id_ed25519")
+        );
+    }
     #[test]
     fn imports_quotes_defaults_first_value_and_proxy() {
         let data=parse("Host prod alias\n HostName example.org\n User dev\n Port=2222\n IdentityFile \"~/.ssh/a key\"\n ProxyJump gateway\nHost *\n User ignored\n", "/home/test","fallback").unwrap();

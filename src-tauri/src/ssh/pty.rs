@@ -60,14 +60,24 @@ impl PtyManager {
         let command = command(&path, kind)?;
         let mut channel = ssh.open_channel(&target).await?;
         let (cols, rows) = dimensions(cols, rows);
-        channel
-            .request_pty(true, "xterm-256color", cols, rows, 0, 0, &[])
-            .await
-            .map_err(|e| AppError::io("pty", e))?;
-        channel
-            .exec(true, command)
-            .await
-            .map_err(|e| AppError::io("pty", e))?;
+        let mut initial = Vec::with_capacity(32768);
+        let startup = async {
+            channel
+                .request_pty(true, "xterm-256color", cols, rows, 0, 0, &[])
+                .await
+                .map_err(|e| AppError::io("pty", e))?;
+            confirm(&mut channel, "pty-request", &mut initial).await?;
+            channel
+                .exec(true, command)
+                .await
+                .map_err(|e| AppError::io("pty", e))?;
+            confirm(&mut channel, "terminal-exec", &mut initial).await
+        }
+        .await;
+        if let Err(error) = startup {
+            let _ = channel.close().await;
+            return Err(error);
+        }
         let id = uuid::Uuid::new_v4().to_string();
         let cancel = CancellationToken::new();
         let (tx, mut rx) = mpsc::channel(32);
@@ -89,7 +99,7 @@ impl PtyManager {
         tokio::spawn(async move {
             let window = Arc::new(Semaphore::new(8));
             let mut seq = 0;
-            let mut bytes = Vec::with_capacity(32768);
+            let mut bytes = initial;
             let mut tick = tokio::time::interval(Duration::from_millis(16));
             let mut exit_code = None;
             loop {
@@ -200,6 +210,45 @@ impl PtyManager {
             });
         }
     }
+}
+async fn confirm(
+    channel: &mut russh::Channel<russh::client::Msg>,
+    stage: &str,
+    buffer: &mut Vec<u8>,
+) -> AppResult<()> {
+    tokio::time::timeout(Duration::from_secs(15), async {
+        loop {
+            match channel.wait().await {
+                Some(ChannelMsg::Success) => return Ok(()),
+                Some(ChannelMsg::Data { data }) | Some(ChannelMsg::ExtendedData { data, .. }) => {
+                    if buffer.len() + data.len() > 65536 {
+                        return Err(AppError::new(
+                            "E_LIMIT",
+                            stage,
+                            "Terminal startup output exceeds limit",
+                        ));
+                    }
+                    buffer.extend_from_slice(&data);
+                }
+                Some(ChannelMsg::Failure) | Some(ChannelMsg::Close) | None => {
+                    return Err(AppError::new(
+                        "E_PTY",
+                        stage,
+                        "Server rejected the terminal request",
+                    ))
+                }
+                _ => {}
+            }
+        }
+    })
+    .await
+    .map_err(|_| {
+        AppError::new(
+            "E_TIMEOUT",
+            stage,
+            "Server did not confirm the terminal request",
+        )
+    })?
 }
 #[allow(clippy::too_many_arguments)]
 async fn send(

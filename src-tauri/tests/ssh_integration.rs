@@ -33,6 +33,7 @@ struct Observed {
     pty: AtomicUsize,
     resizes: AtomicUsize,
     reverse: AtomicUsize,
+    exec: AtomicUsize,
 }
 struct ServerHandler {
     observed: Arc<Observed>,
@@ -83,7 +84,11 @@ impl server::Handler for ServerHandler {
         session: &mut Session,
     ) -> Result<(), Self::Error> {
         self.observed.pty.fetch_add(1, Ordering::SeqCst);
-        session.channel_success(id)?;
+        if _cols == 13 {
+            session.channel_failure(id)?;
+        } else {
+            session.channel_success(id)?;
+        }
         Ok(())
     }
     async fn exec_request(
@@ -92,6 +97,11 @@ impl server::Handler for ServerHandler {
         _command: &[u8],
         session: &mut Session,
     ) -> Result<(), Self::Error> {
+        self.observed.exec.fetch_add(1, Ordering::SeqCst);
+        if _command == b"fixture-disconnect" {
+            session.disconnect(russh::Disconnect::ByApplication, "fixture disconnect", "en")?;
+            return Ok(());
+        }
         session.channel_success(id)?;
         session.data(id, "ready 中文\r\n".as_bytes().to_vec())?;
         Ok(())
@@ -433,6 +443,129 @@ impl client::Handler for PinnedClient {
     ) -> Result<bool, Self::Error> {
         Ok(key.public_key() == self.0)
     }
+}
+#[tokio::test]
+async fn network_disconnect_reconnects_without_replaying_commands() {
+    let f = Fixture::start().await;
+    let c = f.connection();
+    let m = f.manager(&c);
+    let t = target(&c);
+    let first = m
+        .connect(&t, Some("fixture-password".into()), false)
+        .await
+        .unwrap();
+    m.trust(&t, first.fingerprint.as_ref().unwrap()).unwrap();
+    m.connect(&t, Some("fixture-password".into()), false)
+        .await
+        .unwrap();
+    assert!(m.exec(&t, "fixture-disconnect").await.is_err());
+    tokio::time::timeout(Duration::from_secs(6), async {
+        loop {
+            if f.observed.auth.load(Ordering::SeqCst) >= 2
+                && m.statuses().unwrap().iter().any(|s| s.state == "connected")
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .unwrap();
+    m.disconnect(&t).await.unwrap();
+    let count = f.observed.auth.load(Ordering::SeqCst);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(f.observed.auth.load(Ordering::SeqCst), count);
+    assert_eq!(f.observed.exec.load(Ordering::SeqCst), 1);
+}
+#[tokio::test]
+async fn pty_rejection_does_not_start_a_remote_command() {
+    let f = Fixture::start().await;
+    let c = f.connection();
+    let m = f.manager(&c);
+    let t = target(&c);
+    let first = m
+        .connect(&t, Some("fixture-password".into()), false)
+        .await
+        .unwrap();
+    m.trust(&t, first.fingerprint.as_ref().unwrap()).unwrap();
+    m.connect(&t, Some("fixture-password".into()), false)
+        .await
+        .unwrap();
+    let pty = Arc::new(PtyManager::default());
+    let output = tauri::ipc::Channel::<TerminalFrame>::new(|_| Ok(()));
+    let result = pty.open(&m, t.clone(), "/", "shell", 13, 24, output).await;
+    assert_eq!(result.unwrap_err().code, "E_PTY");
+    assert_eq!(f.observed.exec.load(Ordering::SeqCst), 0);
+    m.disconnect(&t).await.unwrap();
+}
+#[tokio::test]
+async fn two_servers_remain_independent_in_one_connection_manager() {
+    let first = Fixture::start().await;
+    let second = Fixture::start().await;
+    let a = first.connection();
+    let b = second.connection();
+    let db = Arc::new(Db::open(&first.dir.path().join("multiple.sqlite")).unwrap());
+    db.save_connection(&a).unwrap();
+    db.save_connection(&b).unwrap();
+    let manager = Arc::new(SshManager::new(
+        db,
+        Arc::new(KnownHosts::new(
+            first.dir.path().join("multi-known_hosts"),
+            None,
+        )),
+        Arc::new(Diagnostics::new(first.dir.path())),
+        None,
+    ));
+    for c in [&a, &b] {
+        let t = target(c);
+        let pending = manager
+            .connect(&t, Some("fixture-password".into()), false)
+            .await
+            .unwrap();
+        manager
+            .trust(&t, pending.fingerprint.as_deref().unwrap())
+            .unwrap();
+        manager
+            .connect(&t, Some("fixture-password".into()), false)
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        manager
+            .statuses()
+            .unwrap()
+            .iter()
+            .filter(|s| s.state == "connected")
+            .count(),
+        2
+    );
+    manager.disconnect(&target(&a)).await.unwrap();
+    let channel = manager.open_channel(&target(&b)).await.unwrap();
+    channel.close().await.unwrap();
+    assert!(manager.open_channel(&target(&a)).await.is_err());
+    assert_eq!(second.observed.auth.load(Ordering::SeqCst), 1);
+    manager.disconnect(&target(&b)).await.unwrap();
+}
+#[cfg(windows)]
+#[tokio::test]
+async fn rejected_saved_password_is_cleared_from_the_os_store() {
+    use agentdesk_lib::secrets::Secrets;
+    let f = Fixture::start().await;
+    let c = f.connection();
+    let m = f.manager(&c);
+    let t = target(&c);
+    let first = m
+        .connect(&t, Some("fixture-password".into()), false)
+        .await
+        .unwrap();
+    m.trust(&t, first.fingerprint.as_ref().unwrap()).unwrap();
+    Secrets::set(&c.id, "password", "fixture-rejected-password").unwrap();
+    let result = m.connect(&t, None, false).await;
+    let saved = Secrets::get(&c.id, "password").unwrap();
+    let _ = Secrets::clear(&c.id, "password");
+    assert_eq!(result.unwrap_err().code, "E_AUTH");
+    assert!(saved.is_none());
+    assert!(!m.is_active(&c.id));
 }
 fn target(c: &Connection) -> Target {
     Target {
