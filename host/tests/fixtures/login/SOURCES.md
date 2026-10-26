@@ -6,3 +6,5 @@
 - Codex 成功模板 `Successfully logged in` 与失败前缀 `Error logging in with device code: `：官方固定版本源码 <https://github.com/openai/codex/blob/rust-v0.164.0/codex-rs/cli/src/login.rs>。过期模板 `device auth timed out after 15 minutes`：<https://github.com/openai/codex/blob/rust-v0.164.0/codex-rs/login/src/device_code_auth.rs>。
 
 `test_login.py` 的其余设备码、回填、失败及 Claude 过期文本为明确标记的构造健壮性用例，不能视为实际授权录制。没有打开浏览器、完成授权、使用账号、读取或复制凭据。成功状态最终由退出后的官方状态检测确认，不能仅凭输出模板判定。
+
+录制文件统一为 LF，并去除行尾空白和末尾空行；保留原文与 ANSI/OSC 控制序列，不改写提示内容。

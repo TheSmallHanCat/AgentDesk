@@ -106,3 +106,17 @@ python scripts/smoke_m3_native.py
 `smoke_m3_native.py` 复用任务 03 的真实 WebView 入口：新建隔离本机项目、项目授权、实际通道探测、Fake 工具经 device-script 创建文件、图形审批与结果渲染、本机文件读取/保存、断开后授权失效。它不注入 IPC fixture，不登录、不发模型请求，不截图真实服务器信息。需先启动开发 URL、构建 debug 桌面程序，并保持已部署 Host 运行。
 
 最终结果与兼容 schema 的回滚要求见 `docs/progress/04-fix-M3.md`；真实 Agent 的四组登录后验收仍待用户本人登录。
+
+## 任务 05：软件内图形登录
+
+```bash
+python scripts/build_host_resources.py
+cargo build --manifest-path src-tauri/Cargo.toml
+pnpm dev --host 127.0.0.1 --port 1420 --strictPort
+python scripts/smoke_login_native.py --deploy
+python scripts/smoke_login.py --url http://127.0.0.1:1420
+```
+
+`smoke_login_native.py` 使用隔离桌面目录、固定主机指纹与 `agentdesk-test`，真实点击环境页登录/取消；检查 Claude 链接/回填、Codex 设备码/链接、进程结束、凭据文件元数据不变、Host/桌面日志和 SQLite 及诊断记录无链接/代码。`--deploy` 通过产品 Installer 更新专用 Host；重跑已部署版本可省略。不会打开授权页面、完成授权、读取凭据、截图登录提示或发送模型请求。结果仅含布尔值、计数与安全错误码，保存 `.tmp/e2e/task05-native-login.json`。
+
+离线 `smoke_login.py` 使用测试 IPC fixture 覆盖三处入口、复制、回填、成功/失败/过期、原始输出兜底、取消、切目标、断线、确认退出和浏览器 Storage 清理。真实诊断导出函数的落盘扫描另由 Rust `login_notifications_are_live_only_and_do_not_reach_diagnostics_or_sqlite` 覆盖；原生脚本检查诊断记录，不驱动系统保存对话框。

@@ -1,3 +1,3 @@
 Opening browser to sign in…
-If the browser did not open, visit: ]8;;https://login.example.invalid/claude/oauth?state=FAKE_STATEhttps://login.example.invalid/claude/oauth?state=FAKE_STATE]8;;
-Paste code here if prompted > 
+If the browser didn't open, visit: ]8;;https://login.example.invalid/claude/oauth?state=FAKE_STATE[94mhttps://login.example.invalid/claude/oauth?state=FAKE_STATE[39m]8;;
+Paste code here if prompted >

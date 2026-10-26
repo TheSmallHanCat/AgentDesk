@@ -1,50 +1,9 @@
-# 用户本人登录 Claude / Codex
+# 图形登录开发说明
 
-AgentDesk 不代为登录，不收集或复制账号凭据。请先在环境页完成 Host 安装与启动；Fake Agent 不需要登录。
+用户在环境页、新建会话或聊天头部点击“登录”，由软件内对话框转交官方 CLI 的授权链接、设备码和回填提示。已登录账号可在对话框中查看账号类型并确认退出。用户不需要阅读本文。
 
-## 通过桌面登录
+Host 使用 Claude `auth login` 的后台 PTY，Codex 优先使用 app-server 的设备码登录接口，旧版本才回退到 `login --device-auth`。桌面仅转交交互；凭据由官方 CLI 管理，Host 和桌面不读取、不复制。登录通知不写 SQLite、事件表、日志或诊断；断线作废，关闭对话框清除内存。
 
-1. 连接测试服务器，打开「环境」，选择该连接并刷新检测结果。
-2. 在 Claude / Codex 的状态旁点击「登录」。桌面会打开远端 PTY，执行官方登录命令。
-3. 点击终端中的授权链接，在浏览器由本人完成授权；需要输入代码时粘贴到该终端。
-4. 返回环境页刷新，确认对应 Agent 显示已登录。模型列表来自原生 CLI，是否能使用模型仍需真实运行验证。
+开发与故障排查先检查环境页状态和安全错误码。输出格式变化时，对话框自动显示清洗后的原始输出和输入框。只有图形流程无法使用时，才由用户在原生 CLI 终端手工运行官方登录命令，再刷新环境状态。不得在工单、日志或截图中保存授权链接、设备码或回填码。
 
-登录终端可以关闭；Host 和服务器上的原生会话独立存活。不要把授权代码、链接中的敏感参数、令牌或账号目录发送给架构师。
-
-## 手工 SSH 备用方式
-
-用原有连接信息，以 `agentdesk-test` 登录服务器（替换尖括号内容）：
-
-```sh
-ssh -p <SSH端口> agentdesk-test@<服务器>
-```
-
-安装后的固定入口如下，无需改 PATH：
-
-```sh
-# Claude：定位当前 Host 虚拟环境随 SDK 安装的官方 CLI
-agentdesk_python="$HOME/.agentdesk/host/current/venv/bin/python"
-agentdesk_claude="$("$agentdesk_python" -c 'import pathlib,claude_agent_sdk; print(pathlib.Path(claude_agent_sdk.__file__).parent / "_bundled" / "claude")')"
-"$agentdesk_claude" auth login
-"$agentdesk_claude" auth status
-
-# Codex：当前 Host 版本配套的官方二进制
-"$HOME/.agentdesk/host/current/bin/codex" login --device-auth
-"$HOME/.agentdesk/host/current/bin/codex" login status
-```
-
-测试用户最终路径为 `/home/agentdesk-test/.agentdesk/host/current/`；`current` 指向已校验的版本目录。不要使用任务 02 的临时 Spike 路径。登录状态由官方 CLI 自行保存，桌面只查询是否登录及账号类型。
-
-## 登录后通知架构师
-
-只需告知：“测试用户的 Claude / Codex 官方登录已完成，请执行任务 03 的真实 Agent 验收。”无需提供账号或登录输出。
-
-待验收：两种 Agent 的新建、模型可用性、流式文本、工具与文件事件、审批允许/拒绝、多设备竞争、AskUserQuestion、停止、断线补取、原生恢复、原生记录缺失错误。Codex 还需在真实模型流程中复核权限实际生效。自动契约入口：在服务器的隔离测试目录显式设置 `AGENTDESK_NATIVE_CONTRACT=1` 后执行 Host pytest；该步骤会发送模型请求，应在架构师组织验收时执行。
-
-测试服务器低于 glibc 2.28 的产品支持基线；本轮实测可运行不代表扩大支持范围。系统升级或 CLI 版本变化后需要重新检测。
-
-## M3 登录后验收
-
-本轮仍不尝试登录或读取账号凭据。用户本人完成官方登录后，按 `progress/04-fix-M3.md` 的两种 Agent × 远端/本机四组清单验收。Windows 本机模式需先准备随包组件、确认服务器支持 RemoteCommand，并在项目中授权执行通道；控制连接成功不代表执行端已就绪。Codex 本机模式固定使用 workspace-write、network_access=true 和设备入口 writable_roots，不放宽为 danger-full-access。
-
-真实会话“删除”采用归档，原生记录保留；可在已归档列表恢复。
+协议见 [M2 契约](M2-CONTRACT.md)，解析样例与验收见 [任务 05 报告](progress/05-login.md)。

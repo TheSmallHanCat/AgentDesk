@@ -18,7 +18,10 @@
 - `sync.subscribe({sessionId}) -> {subscribed:true}`；`sync.since({sessionId?,lastSeq,limit?}) -> {events:HostEvent[],snapshots:HostEvent[],currentSeq,hasMore}`。currentSeq 是已扫描水位；分页时仅前进到已返回页的末尾，不能跳过事件。
 - `event.blob({sessionId,seq,offset?,limit?}) -> {text,offset,total,hasMore}`；以字节游标分块，帧始终小于 4 MiB。
 - `agent.status({}) -> capabilities`；`env.probe({}) -> object`；尚未实现的 P1 方法返回 E_CAPABILITY，不提供虚假业务成功；已实现 M3 接口见补充契约。
-- `agent.login.start({agent}) -> {agent,transport:'pty',command}` 只准备命令，由桌面 PTY 执行；`agent.logout({agent}) -> {loggedOut:true}` 仅显式调用时运行官方退出命令。本轮不调用这两个方法的认证执行路径。
+- `login.start({agent}) -> {loginId,agent}`：Host 管理官方登录进程，每个 Agent 最多一个，归属发起请求的连接 Client。`login.respond({loginId,text}) -> {accepted:true}` 转交单行输入；`login.cancel({loginId}) -> {accepted:true}` 结束进程组并关闭 PTY/app-server。旧 `agent.login.start` 已移除。
+- `login.prompt` / `login.state` 为独立 JSON-RPC 实时通知（不是 HostEvent，不分配 seq、不写 events/blob/日志、不进入 sync.since）。params 包含 loginId/agent；prompt 可带 url/deviceCode/needsInput/rawOutput，state 包含 starting/waiting/succeeded/failed/expired/cancelled 及固定安全原因码、刷新后的 capability。断线立即作废，重连重新开始。
+- 能力包含 `authStatus=missing|loggedOut|loggedIn|failed|checking`、公开 `accountType`；hello 异步启动探测，agent.status/env.probe 等待探测完成。CLI 退出清除缓存后重新检测，成功以实际登录状态为准。
+- `agent.logout({agent}) -> {loggedOut:true,capability}` 仅显式确认后调用官方退出命令；有活动运行或登录会话时拒绝。
 - `host.prepareShutdown({}) -> {prepared:true,leaseSeconds:60}` 原子进入维护状态，活跃运行时拒绝；租约内 run.send 返回 E_HOST_DRAINING。`host.cancelShutdown({}) -> {cancelled:true}` 由同设备解除。SSH 停机/升级/回滚先获取该屏障，连接丢失后租约仍有效，超时自动恢复接收。
 
 `HostEvent={seq,sessionId,runId?,ts,type,itemId?,payload}`。通知为 `{jsonrpc:'2.0',method:'event',params:HostEvent}`。`item.*` 的 payload 包含 `kind` 和 `text` 或 `delta`；工具为 `name/input/output`；审批 payload 为 `approvalId/kind/tool/input/questions`。提问结构采用 Claude AskUserQuestion 的 questions（question/header/options[{label,description}]/multiSelect）。`run.finished.payload.state` 为 completed/failed/interrupted。
@@ -42,10 +45,16 @@ seq 按 1024 号段预留，进程重启跳过未使用尾号，允许间隙但�
 
 `session_create({target,agent,model,permissionMode,title?})`；`session_list({target})`；`session_history({target,beforeSeq?,limit?})`；`session_rename({target,title})`；`session_delete({target})`。`run_send({target,text,clientMsgId?})` 由 Rust 缺省生成 id，前端需在发送前分配 clientMsgId，以支持状态未知；不自动重发。
 
-`run_stop({target,runId})`、`approval_respond({target,approvalId,decision})`。`env_probe`、`env_install_plan`、`env_install_run`、`env_install_cancel`、`host_start`、`host_stop`、`host_status`、`agent_login_start`；安装计划含 planId/artifacts/paths/commands，执行必须匹配服务器端保存的计划。安装取消关闭归属进程组，不能切换 current。
+`run_stop({target,runId})`、`approval_respond({target,approvalId,decision})`。`env_probe`、`env_install_plan`、`env_install_run`、`env_install_cancel`、`host_start`、`host_stop`、`host_status`；安装计划含 planId/artifacts/paths/commands，执行必须匹配服务器端保存的计划。安装取消关闭归属进程组，不能切换 current。
 
 `session_draft_get({target})->Reply<string>` / `session_draft_set({target,text})->Reply<null>` 将草稿存入桌面 SQLite。`host_rollback({target,fakeAgent?})` 仅切回已保留的受管版本，不删除版本或数据。订阅终止最后推送 `{target,events:[],disconnected:true,closed:true}`；临时断线没有 closed，前端保留订阅 id，等待 Rust 补取。
 
 环境信息采用 `{layers:[{name,status,detail}],agents,host:{installed,running,version?,hostId?},sameHostConnections?:string[]}`；状态为 ready/missing/failed/unsupported/unknown。不得把版本可读当作沙箱或登录已就绪。
 
 M3 本机项目、执行通道、订阅 token 与权限补充见 `M3-CONTRACT.md`。
+
+## D-10 图形登录 IPC
+
+`agent_status({target}) -> Reply<capabilities>`；`agent_login_start({target,agent,onEvents:Channel<LoginFrame>}) -> Reply<{loginId,agent}>`；`agent_login_respond({target,loginId,text})`、`agent_login_cancel({target,loginId})` 返回 `Reply<{accepted:true}>`；`agent_logout({target,agent}) -> Reply<{loggedOut:true,capability}>`。
+
+`LoginFrame={target,method:'login.prompt'|'login.state',data:LoginPrompt|LoginState,disconnected?:boolean}`。Rust 在 start 前订阅独立实时通道，后续操作严格核对创建时的全部 Target（含 requestSeq），不得通过重连恢复旧 loginId。通道丢帧视为登录失效并取消；不执行补取。关闭对话框、切目标、断线或终态清除前端链接/代码/原始输出/输入。原生 CLI 终端继续保留，但不是登录入口。
