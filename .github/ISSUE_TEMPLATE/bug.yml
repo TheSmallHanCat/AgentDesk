@@ -1,0 +1,14 @@
+name: 缺陷报告
+description: 报告可复现的桌面问题，请勿上传秘密或项目内容
+body:
+  - type: textarea
+    id: behavior
+    attributes:
+      label: 复现步骤、预期与实际行为
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: 系统、版本和脱敏诊断
+      description: 不要提交密码、私钥、令牌、真实主机地址或终端正文。
