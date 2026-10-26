@@ -159,6 +159,24 @@ def main(local=False):
                 history = invoke("session_history", target=target, limit=200)["data"]
                 seqs = [event["seq"] for event in history["events"]]
                 assert len(seqs) == len(set(seqs))
+                if local:
+                    page.get_by_role("button", name="撤销本项目授权", exact=True).click()
+                    deadline = time.monotonic() + 15
+                    while True:
+                        status = invoke("device_status", target=target)["data"]
+                        if not status["enabled"]:
+                            break
+                        assert time.monotonic() < deadline
+                        time.sleep(.1)
+                    result["revokedDeviceState"] = status
+                    for command, arguments in [
+                        ("run_send", {"text": "Inspect", "clientMsgId": uuid.uuid4().hex}),
+                        ("run_append", {"text": "Inspect", "clientMsgId": uuid.uuid4().hex, "runId": run["runId"]}),
+                    ]:
+                        rejected = page.evaluate("async ({command,args})=>{try{await window.__TAURI_INTERNALS__.invoke(command,args);return null;}catch(error){return {code:error.code,stage:error.stage};}}", {"command": command, "args": {"target": target, **arguments}})
+                        result.setdefault("revokedRunCodes", {})[command] = rejected
+                        assert rejected["code"] == "E_DEVICE_NOT_READY"
+                    result["passed"].append("webview_revoke_blocks_send_and_append")
                 invoke("session_unsubscribe", target=target, subscriptionId=subscription["data"]["subscriptionId"])
                 invoke("session_delete", target=target)
                 # The independent Host remains running after desktop disconnect.

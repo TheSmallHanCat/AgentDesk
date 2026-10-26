@@ -132,6 +132,14 @@ async fn tunnel(
     resources: &ExecutorResources,
 ) -> (LocalExecutor, String) {
     let registration = must(client.request("device.register", json!({})).await);
+    must(
+        client
+            .request(
+                "device.project.enable",
+                json!({"projectId":target.project_id}),
+            )
+            .await,
+    );
     let socket = registration["tunnelSocket"]
         .as_str()
         .expect("Device socket is required")
@@ -163,10 +171,117 @@ async fn tunnel(
     (executor, socket)
 }
 
+async fn reconnect_while_old_control_is_blackholed(
+    db: Arc<Db>,
+    directory: &Path,
+    private: &Path,
+    client: &HostClient,
+    device_id: &str,
+) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+    async fn forward<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
+        mut read: R,
+        mut write: W,
+        blackhole: Arc<AtomicBool>,
+        stop: CancellationToken,
+    ) {
+        let mut bytes = vec![0; 32768];
+        loop {
+            let result = tokio::select! { _ = stop.cancelled() => break, result = read.read(&mut bytes) => result };
+            let Ok(count) = result else { break };
+            if count == 0 {
+                break;
+            }
+            if !blackhole.load(Ordering::SeqCst) && write.write_all(&bytes[..count]).await.is_err()
+            {
+                break;
+            }
+        }
+    }
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let blackhole = Arc::new(AtomicBool::new(false));
+    let stop = CancellationToken::new();
+    let gate = blackhole.clone();
+    let cancel = stop.clone();
+    let remote_host = std::env::var("AGENTDESK_E2E_HOST").unwrap();
+    let remote_port = std::env::var("AGENTDESK_E2E_PORT")
+        .unwrap()
+        .parse::<u16>()
+        .unwrap();
+    let proxy = tokio::spawn(async move {
+        let (incoming, _) = listener.accept().await.unwrap();
+        let remote = tokio::net::TcpStream::connect((remote_host.as_str(), remote_port))
+            .await
+            .unwrap();
+        let (ir, iw) = incoming.into_split();
+        let (rr, rw) = remote.into_split();
+        tokio::join!(
+            forward(ir, rw, gate.clone(), cancel.clone()),
+            forward(rr, iw, gate, cancel)
+        );
+    });
+    let old = Connection {
+        id: "m3-blackhole".into(),
+        name: "Review".into(),
+        host: "127.0.0.1".into(),
+        port,
+        user: "agentdesk-test".into(),
+        auth_method: "key".into(),
+        key_path: Some(private.join("id_ed25519").to_string_lossy().into()),
+        agent_kind: None,
+        proxy_jump: None,
+        source: None,
+        last_used_at: None,
+    };
+    must(db.save_connection(&old));
+    let pinned = russh::keys::PublicKey::from_openssh(
+        &std::fs::read_to_string(private.join("server_key.pub")).unwrap(),
+    )
+    .unwrap();
+    let known = Arc::new(KnownHosts::new(
+        directory.join("blackhole-known-hosts"),
+        None,
+    ));
+    must(known.trust("127.0.0.1", port, &pinned));
+    let old_ssh = Arc::new(SshManager::new(
+        db,
+        known,
+        Arc::new(Diagnostics::new(directory)),
+        None,
+    ));
+    let target = Target {
+        connection_id: old.id,
+        device_local: false,
+        project_id: None,
+        session_id: None,
+        request_seq: 1,
+    };
+    assert_eq!(
+        must(old_ssh.connect(&target, None, None).await).state,
+        "connected"
+    );
+    let old_client = must(HostClient::connect(&old_ssh, &target, device_id).await);
+    let previous = must(old_client.request("device.register", json!({})).await);
+    blackhole.store(true, Ordering::SeqCst);
+    let started = Instant::now();
+    let next = must(client.request("device.register", json!({})).await);
+    assert_ne!(previous["generation"], next["generation"]);
+    assert!(started.elapsed() < Duration::from_secs(10));
+    old_client.cancel.cancel();
+    stop.cancel();
+    proxy.await.unwrap();
+    must(old_ssh.disconnect(&target).await);
+    println!("PASS: m3_blackholed_control_immediate_reconnect_registration_takeover");
+}
+
 const PROBE: &str = r#"
 command=['ssh','-F',p['config'],'device-script']
 if p.get('sandbox'):
     command=[str(pathlib.Path.home()/'.agentdesk/host/current/bin/codex'),'-c','sandbox_mode="workspace-write"','-c','sandbox_workspace_write.network_access=true','-c','sandbox_workspace_write.writable_roots='+json.dumps([p['deviceRoot']]),'sandbox','--']+command
+if p.get('readOnly'):
+    command=[str(pathlib.Path.home()/'.agentdesk/host/current/bin/codex'),'-c','sandbox_mode="read-only"','sandbox','--','ssh','-F',p['config'],'device-script']
 started=time.monotonic()
 result=subprocess.run(command,input=p['script'].encode('utf-8'),stdout=subprocess.PIPE,stderr=subprocess.PIPE,cwd=p['cwd'],timeout=80)
 error=result.stderr.decode('utf-8',errors='replace')
@@ -267,6 +382,14 @@ async fn real_device_reverse_native_reconnect_sandbox_wait_grace_cleanup() {
         println!("PASS: m3_production_host_deployed");
     }
     let client = must(HostClient::connect(&ssh, &target, device_id).await);
+    reconnect_while_old_control_is_blackholed(
+        db.clone(),
+        directory.path(),
+        &private,
+        &client,
+        device_id,
+    )
+    .await;
     let local_path = root.join(".tmp/e2e/local-project/reverse-channel");
     std::fs::create_dir_all(&local_path).unwrap();
     let project = Project {
@@ -299,6 +422,11 @@ async fn real_device_reverse_native_reconnect_sandbox_wait_grace_cleanup() {
         .expect("Native root required")
         .to_owned();
     let session = must(client.request("session.create", json!({"projectId":project.id,"agent":"fake","model":"fake-default","permissionMode":"default"})).await);
+    for agent in ["claude", "codex"] {
+        let error = client.request("session.create", json!({"projectId":project.id,"agent":agent,"model":"unused","permissionMode":"plan"})).await.unwrap_err();
+        assert_eq!(error.code, "E_LOCAL_PLAN_UNSUPPORTED");
+    }
+    println!("PASS: m3_local_plan_explicitly_rejected_before_native_execution");
     must(db.register_session(&target, &session));
     let sid = session["id"].as_str().unwrap().to_owned();
     target.session_id = Some(sid.clone());
@@ -363,6 +491,79 @@ async fn real_device_reverse_native_reconnect_sandbox_wait_grace_cleanup() {
             sandbox["errorCategory"].as_str().unwrap_or("other")
         );
     }
+
+    let read_only_file = local_path.join(format!("readonly-{}.txt", uuid::Uuid::new_v4().simple()));
+    let mut read_only = probe.clone();
+    read_only["readOnly"] = true.into();
+    read_only["script"] = format!(
+        "Set-Content -LiteralPath '{}' -Value 'readonly-probe'\n",
+        read_only_file
+            .to_string_lossy()
+            .replace('\\', "/")
+            .replace('\'', "''")
+    )
+    .into();
+    let readonly_result = python(&ssh, &target, read_only, PROBE, 90).await;
+    println!(
+        "OBSERVE: m3_raw_codex_read_only_socket_code={} local_write={} category={}",
+        readonly_result["code"],
+        read_only_file.exists(),
+        readonly_result["errorCategory"]
+    );
+    if read_only_file.exists() {
+        std::fs::remove_file(read_only_file).unwrap();
+    }
+
+    // Independent project grants share a device key, but Host normal paths and
+    // session entries must stop working immediately when their grant is revoked.
+    let second_id = format!("m3_second_{}", uuid::Uuid::new_v4().simple());
+    let second_path = local_path.join("second-project");
+    std::fs::create_dir_all(&second_path).unwrap();
+    must(client.request("project.upsert", json!({"id":second_id,"path":second_path.to_string_lossy(),"name":"Second","kind":"local"})).await);
+    must(
+        client
+            .request("device.project.enable", json!({"projectId":second_id}))
+            .await,
+    );
+    let second = must(client.request("session.create", json!({"projectId":second_id,"agent":"fake","model":"fake-default","permissionMode":"default"})).await);
+    let second_sid = second["id"].as_str().unwrap();
+    let mut second_events = client.events.subscribe();
+    must(
+        client
+            .request("sync.subscribe", json!({"sessionId":second_sid}))
+            .await,
+    );
+    must(client.request("run.send", json!({"sessionId":second_sid,"clientMsgId":uuid::Uuid::new_v4().to_string(),"text":"Inspect","script":[]})).await);
+    event(&mut second_events, second_sid, "run.finished", 10).await;
+    must(
+        client
+            .request("device.project.revoke", json!({"projectId":project.id}))
+            .await,
+    );
+    let denied = client.request("run.send", json!({"sessionId":sid,"clientMsgId":uuid::Uuid::new_v4().to_string(),"text":"Inspect","script":[]})).await.unwrap_err();
+    assert_eq!(denied.code, "E_DEVICE_UNAUTHORIZED");
+    let revoked = python(&ssh, &target, json!({"root":device_root,"config":session_config}), "print(json.dumps({'key':(pathlib.Path(p['root'])/'keys/id').is_file(),'session':pathlib.Path(p['config']).exists()}))", 15).await;
+    assert_eq!(revoked, json!({"key":true,"session":false}));
+    assert_ne!(
+        python(&ssh, &target, probe.clone(), PROBE, 15).await["code"],
+        0
+    );
+    must(
+        client
+            .request("device.project.revoke", json!({"projectId":second_id}))
+            .await,
+    );
+    let revoked = python(&ssh, &target, json!({"root":device_root}), "print(json.dumps({'keys':(pathlib.Path(p['root'])/'keys').exists(),'ready':(pathlib.Path(p['root'])/'ready').exists()}))", 15).await;
+    assert_eq!(revoked, json!({"keys":false,"ready":false}));
+    must(ssh.cancel_reverse_local(&target, &socket).await);
+    executor.stop().await;
+    let (next_executor, next_socket) = tunnel(&ssh, &target, &client, &resources).await;
+    assert_eq!(next_socket, socket);
+    executor = next_executor;
+    let mut resumed_events = client.events.subscribe();
+    must(client.request("run.send", json!({"sessionId":sid,"clientMsgId":uuid::Uuid::new_v4().to_string(),"text":"Inspect","script":[]})).await);
+    event(&mut resumed_events, &sid, "run.finished", 10).await;
+    println!("PASS: m3_project_revoke_blocks_session_last_revoke_deletes_keys");
 
     let old_runtime = executor.runtime_directory().unwrap().to_path_buf();
     let old_key = executor.credentials().host_public_key.clone();
