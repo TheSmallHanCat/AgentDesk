@@ -32,6 +32,67 @@ fn wide(value: impl AsRef<OsStr>) -> Vec<u16> {
     value.as_ref().encode_wide().chain(Some(0)).collect()
 }
 
+/// Win32-OpenSSH reads the 64-bit machine key even in a private sshd instance.
+/// Read it only; never change the system SSH server's shell configuration.
+pub fn openssh_default_shell() -> AppResult<String> {
+    use windows_sys::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_SUCCESS};
+    use windows_sys::Win32::System::Registry::{
+        RegGetValueW, HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ, RRF_SUBKEY_WOW6464KEY,
+    };
+    let mut buffer = vec![0u16; 32768];
+    let mut bytes = (buffer.len() * 2) as u32;
+    let code = unsafe {
+        RegGetValueW(
+            HKEY_LOCAL_MACHINE,
+            wide(r"SOFTWARE\OpenSSH").as_ptr(),
+            wide("DefaultShell").as_ptr(),
+            RRF_RT_REG_SZ | RRF_SUBKEY_WOW6464KEY,
+            null_mut(),
+            buffer.as_mut_ptr().cast(),
+            &mut bytes,
+        )
+    };
+    if code == ERROR_FILE_NOT_FOUND {
+        return Ok("cmd.exe".into());
+    }
+    if code != ERROR_SUCCESS {
+        return Err(AppError::new(
+            "E_LOCAL_SHELL",
+            "local.executor",
+            format!("Cannot inspect OpenSSH DefaultShell (Windows error {code})"),
+        ));
+    }
+    let count = buffer.iter().position(|c| *c == 0).unwrap_or(buffer.len());
+    Ok(String::from_utf16_lossy(&buffer[..count]))
+}
+
+pub fn force_command(powershell: &str, default_shell: &str, arguments: &str) -> AppResult<String> {
+    if powershell.contains(['%', '"', '\r', '\n', '\0']) {
+        return Err(AppError::new(
+            "E_LOCAL_PATH",
+            "local.executor",
+            "PowerShell path contains unsupported command characters",
+        ));
+    }
+    let shell = Path::new(default_shell)
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_ascii_lowercase();
+    match shell.as_str() {
+        "cmd.exe" | "" => Ok(format!("\"{powershell}\" {arguments}")),
+        "pwsh.exe" | "powershell.exe" => Ok(format!(
+            "& '{}' {arguments}; exit $LASTEXITCODE",
+            powershell.replace('\'', "''")
+        )),
+        _ => Err(AppError::new(
+            "E_LOCAL_SHELL",
+            "local.executor",
+            "OpenSSH DefaultShell must be cmd.exe, powershell.exe or pwsh.exe for local execution",
+        )),
+    }
+}
+
 pub fn hidden_command(executable: &Path) -> std::process::Command {
     let mut command = std::process::Command::new(executable);
     command.creation_flags(CREATE_NO_WINDOW);

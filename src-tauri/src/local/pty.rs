@@ -5,7 +5,9 @@ use crate::{
     models::Target,
     ssh::pty::TerminalFrame,
 };
-use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
+#[cfg(not(windows))]
+use portable_pty::{native_pty_system, MasterPty};
+use portable_pty::{ChildKiller, CommandBuilder, PtySize};
 use std::{
     collections::{BTreeMap, HashMap},
     io::{Read, Write},
@@ -15,6 +17,25 @@ use std::{
 };
 use tokio::sync::{mpsc, OwnedSemaphorePermit, Semaphore};
 use tokio_util::sync::CancellationToken;
+
+enum LocalMaster {
+    #[cfg(windows)]
+    Windows(crate::platform::conpty::Console),
+    #[cfg(not(windows))]
+    Portable(Box<dyn MasterPty + Send>),
+}
+impl LocalMaster {
+    fn resize(&self, size: PtySize) -> AppResult<()> {
+        match self {
+            #[cfg(windows)]
+            Self::Windows(console) => console.resize(size),
+            #[cfg(not(windows))]
+            Self::Portable(master) => master
+                .resize(size)
+                .map_err(|e| AppError::io("local.pty", e)),
+        }
+    }
+}
 
 enum Input {
     Data(String),
@@ -153,59 +174,47 @@ impl PtyManager {
         }
         let (command, executable) = shell_command(shell, &path)?;
         let dimensions = size(cols, rows);
-        let (pair, mut child, reader, writer, control) = tokio::task::spawn_blocking(move || {
-            let pair = native_pty_system()
-                .openpty(dimensions)
-                .map_err(|error| AppError::io("local.pty", error))?;
-            let mut child = pair
-                .slave
-                .spawn_command(command)
-                .map_err(|error| AppError::io("local.pty", error))?;
+        let (master, mut child, reader, writer, control) = tokio::task::spawn_blocking(move || {
             #[cfg(windows)]
-            let job = {
-                let job = crate::platform::executor::Job::new()?;
-                let result = child
-                    .as_raw_handle()
-                    .ok_or_else(|| {
-                        AppError::new(
-                            "E_LOCAL_PTY",
-                            "local.pty",
-                            "ConPTY did not return a process handle",
-                        )
-                    })
-                    .and_then(|handle| {
-                        // The child retains ownership until after Job assignment.
-                        let handle =
-                            unsafe { std::os::windows::io::BorrowedHandle::borrow_raw(handle) };
-                        job.assign_process(handle, &executable)
-                    });
-                if let Err(error) = result {
-                    let _ = child.kill();
-                    return Err(error);
-                }
-                job
+            let (master, child, reader, writer, job) = {
+                let opened = crate::platform::conpty::spawn(command, dimensions)?;
+                (
+                    LocalMaster::Windows(opened.console),
+                    opened.child,
+                    Box::new(opened.reader) as Box<dyn Read + Send>,
+                    Box::new(opened.writer) as Box<dyn Write + Send>,
+                    opened.job,
+                )
             };
             #[cfg(not(windows))]
+            let (master, child, reader, writer) = {
+                let pair = native_pty_system()
+                    .openpty(dimensions)
+                    .map_err(|error| AppError::io("local.pty", error))?;
+                let child = pair
+                    .slave
+                    .spawn_command(command)
+                    .map_err(|error| AppError::io("local.pty", error))?;
+                let reader = pair
+                    .master
+                    .try_clone_reader()
+                    .map_err(|error| AppError::io("local.pty", error))?;
+                let writer = pair
+                    .master
+                    .take_writer()
+                    .map_err(|error| AppError::io("local.pty", error))?;
+                (LocalMaster::Portable(pair.master), child, reader, writer)
+            };
             let _ = executable;
-            let reader = pair
-                .master
-                .try_clone_reader()
-                .map_err(|error| AppError::io("local.pty", error))?;
-            let writer = pair
-                .master
-                .take_writer()
-                .map_err(|error| AppError::io("local.pty", error))?;
             let control = Arc::new(Control {
                 killer: Mutex::new(child.clone_killer()),
                 #[cfg(windows)]
                 job,
             });
-            Ok::<_, AppError>((pair, child, reader, writer, control))
+            Ok::<_, AppError>((master, child, reader, writer, control))
         })
         .await
         .map_err(|error| AppError::io("local.pty", error))??;
-        drop(pair.slave);
-        let master = pair.master;
         let id = format!("local-{}", uuid::Uuid::new_v4());
         let cancel = CancellationToken::new();
         let finished = CancellationToken::new();
@@ -442,7 +451,7 @@ fn read_output(
 }
 
 fn write_input(
-    mut master: Box<dyn MasterPty + Send>,
+    mut master: LocalMaster,
     mut writer: Box<dyn Write + Send>,
     mut input: mpsc::Receiver<Input>,
     stop: CancellationToken,
@@ -603,7 +612,12 @@ mod tests {
                 }
             })
             .await
-            .unwrap();
+            .unwrap_or_else(|_| {
+                panic!(
+                    "ConPTY {shell} timed out: {}",
+                    String::from_utf8_lossy(&all_output)
+                )
+            });
             assert_eq!(code, Some(23));
             let text = String::from_utf8_lossy(&all_output);
             assert!(text.contains(if shell == "pwsh" {

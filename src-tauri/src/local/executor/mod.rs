@@ -188,9 +188,9 @@ pub fn script_command() -> String {
         .encode_utf16()
         .flat_map(u16::to_le_bytes)
         .collect();
-    // RemoteCommand expands percent tokens before Windows cmd expands environment variables.
+    // Stable client request; sshd enforces an absolute runner command locally.
     format!(
-        "\"%%AGENTDESK_EXECUTOR_PWSH%%\" -NoLogo -NoProfile -NonInteractive -EncodedCommand {}",
+        "pwsh.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand {}",
         base64::engine::general_purpose::STANDARD.encode(bytes)
     )
 }
@@ -232,8 +232,11 @@ impl LocalExecutor {
         }
         let public_key = std::fs::read_to_string(runtime.path().join("identity.pub"))
             .map_err(|error| AppError::io("local.executor", error))?;
-        std::fs::write(runtime.path().join("authorized_keys"), public_key.trim())
-            .map_err(|error| AppError::io("local.executor", error))?;
+        std::fs::write(
+            runtime.path().join("authorized_keys"),
+            format!("restrict {}\n", public_key.trim()),
+        )
+        .map_err(|error| AppError::io("local.executor", error))?;
         let private_key = std::fs::read_to_string(runtime.path().join("identity"))
             .map_err(|error| AppError::io("local.executor", error))?;
         let host_public_key = std::fs::read_to_string(runtime.path().join("host.pub"))
@@ -255,7 +258,11 @@ impl LocalExecutor {
             .map_err(|error| AppError::io("local.executor", error))?
             .port();
         let runtime_path = config_path(runtime.path())?;
-        let openssh_path = config_path(&resources.openssh_directory)?;
+        let forced = windows::force_command(
+            &config_path(&resources.powershell)?,
+            &windows::openssh_default_shell()?,
+            script_command().strip_prefix("pwsh.exe ").unwrap(),
+        )?;
         let allowed = if account == user
             || account.starts_with(&format!(
                 "{}\\",
@@ -268,7 +275,7 @@ impl LocalExecutor {
             format!("\"{}\" \"{}\"", account, user)
         };
         let configuration = format!(
-            "Port {port}\nListenAddress 127.0.0.1\nAddressFamily inet\nHostKey \"{runtime_path}/host\"\nAuthorizedKeysFile \"{runtime_path}/authorized_keys\"\nPidFile \"{runtime_path}/sshd.pid\"\nPubkeyAuthentication yes\nAuthenticationMethods publickey\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nAllowUsers {allowed}\nAllowTcpForwarding no\nAllowAgentForwarding no\nPermitTunnel no\nX11Forwarding no\nPermitUserEnvironment no\nMaxAuthTries 3\nMaxStartups 64\nMaxSessions 128\nSubsystem sftp \"{openssh_path}/sftp-server.exe\"\nLogLevel ERROR\n"
+            "Port {port}\nListenAddress 127.0.0.1\nAddressFamily inet\nHostKey \"{runtime_path}/host\"\nAuthorizedKeysFile \"{runtime_path}/authorized_keys\"\nPidFile \"{runtime_path}/sshd.pid\"\nPubkeyAuthentication yes\nAuthenticationMethods publickey\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nAllowUsers {allowed}\nDisableForwarding yes\nPermitTTY no\nPermitUserRC no\nPermitTunnel no\nX11Forwarding no\nPermitUserEnvironment no\nMaxAuthTries 3\nMaxStartups 64\nMaxSessions 128\nForceCommand {forced}\nLogLevel ERROR\n"
         );
         let configuration_path = runtime.path().join("sshd_config");
         std::fs::write(&configuration_path, configuration)
@@ -310,10 +317,7 @@ impl LocalExecutor {
                 "-f".into(),
                 configuration_path.to_string_lossy().into_owned(),
             ],
-            &[
-                ("SSH_TEST_ENVIRONMENT", OsStr::new("1")),
-                ("AGENTDESK_EXECUTOR_PWSH", resources.powershell.as_os_str()),
-            ],
+            &[("SSH_TEST_ENVIRONMENT", OsStr::new("1"))],
         )?;
         let mut executor = Self {
             port,
@@ -439,6 +443,15 @@ impl LocalExecutor {
         }
         self.credentials.private_key.zeroize();
         if let Some(runtime) = self.runtime.take() {
+            // TerminateJobObject is asynchronous for descendants. Wait briefly
+            // for their inherited log handles before deleting connection keys.
+            for _ in 0..50 {
+                match std::fs::remove_dir_all(runtime.path()) {
+                    Ok(()) => break,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+                    Err(_) => std::thread::sleep(Duration::from_millis(20)),
+                }
+            }
             let _ = runtime.close();
         }
     }
@@ -553,6 +566,76 @@ mod tests {
         assert!(source.contains("OutputRendering = 'PlainText'"));
         assert!(!command.contains("-Command -"));
         assert!(!command.contains("-File -"));
+        assert!(!command.contains('%'));
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn runner_command_works_with_cmd_and_powershell_default_shells() {
+        use std::os::windows::process::CommandExt;
+        use tokio::io::AsyncWriteExt;
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let resources = ExecutorResources::discover(root);
+        let mut paths = vec![resources.powershell.parent().unwrap().to_owned()];
+        paths.extend(std::env::split_paths(
+            &std::env::var_os("PATH").unwrap_or_default(),
+        ));
+        let path = std::env::join_paths(paths).unwrap();
+        // Exercise exactly the shell -c boundary used by Win32-OpenSSH, without
+        // changing HKLM. Both interpreters receive the production ForceCommand.
+        for powershell in [false, true] {
+            let mut command = if powershell {
+                windows::hidden_command(&resources.powershell)
+            } else {
+                windows::hidden_command(Path::new("cmd.exe"))
+            };
+            if powershell {
+                command.args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command"]);
+            } else {
+                command.args(["/d", "/s", "/c"]);
+            }
+            let forced = windows::force_command(
+                &config_path(&resources.powershell).unwrap(),
+                if powershell {
+                    "powershell.exe"
+                } else {
+                    "cmd.exe"
+                },
+                script_command().strip_prefix("pwsh.exe ").unwrap(),
+            )
+            .unwrap();
+            if powershell {
+                command.arg(forced);
+            } else {
+                command.raw_arg(format!("\"{forced}\""));
+            }
+            command.env("PATH", &path);
+            let mut command = tokio::process::Command::from(command);
+            command
+                .kill_on_drop(true)
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped());
+            let mut child = command.spawn().unwrap();
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(b"Write-Output 'shell-ok'\nexit 7\n")
+                .await
+                .unwrap();
+            let output = tokio::time::timeout(Duration::from_secs(15), child.wait_with_output())
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                output.status.code(),
+                Some(7),
+                "PowerShell default={powershell}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(String::from_utf8_lossy(&output.stdout).contains("shell-ok"));
+        }
     }
 
     #[test]
@@ -626,6 +709,18 @@ mod tests {
             .all(|component| component.available));
         let mut executor = LocalExecutor::start(resources.clone()).await.unwrap();
         let runtime = executor.runtime_directory().unwrap().to_path_buf();
+        let config_text = std::fs::read_to_string(runtime.join("sshd_config")).unwrap();
+        for setting in [
+            "DisableForwarding yes",
+            "PermitTTY no",
+            "PermitUserRC no",
+            "ForceCommand ",
+        ] {
+            assert!(config_text.contains(setting));
+        }
+        assert!(std::fs::read_to_string(runtime.join("authorized_keys"))
+            .unwrap()
+            .starts_with("restrict ssh-ed25519 "));
         let project = root.join(".tmp/e2e/local-project/executor-smoke");
         std::fs::create_dir_all(&project).unwrap();
         let known_hosts = runtime.join("known_hosts");

@@ -111,6 +111,36 @@ fn local_files_keep_ownership_roots_conflicts_and_native_content() {
     assert!(fs::read(&db, &wrong, &path).is_err());
     assert_eq!(fs::list(&db, &owner, &project.path, true).unwrap().len(), 1);
     fs::mutate(&db, &owner, "delete", &path, None).unwrap();
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let directory = dir.path().join("directory");
+        let link = dir.path().join("junction");
+        std::fs::create_dir(&directory).unwrap();
+        std::fs::write(directory.join("preserved.txt"), "preserved").unwrap();
+        let output = std::process::Command::new("cmd.exe")
+            .args(["/d", "/c", "mklink", "/J"])
+            .arg(&link)
+            .arg(&directory)
+            .creation_flags(0x08000000)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "Cannot create the isolated junction"
+        );
+        fs::mutate(&db, &owner, "delete", &link.to_string_lossy(), None).unwrap();
+        assert!(!link.exists());
+        assert_eq!(
+            std::fs::read_to_string(directory.join("preserved.txt")).unwrap(),
+            "preserved"
+        );
+        let symlink = dir.path().join("directory-symlink");
+        if std::os::windows::fs::symlink_dir(&directory, &symlink).is_ok() {
+            fs::mutate(&db, &owner, "delete", &symlink.to_string_lossy(), None).unwrap();
+            assert!(directory.join("preserved.txt").exists());
+        }
+    }
     assert!(dir.path().exists());
 }
 

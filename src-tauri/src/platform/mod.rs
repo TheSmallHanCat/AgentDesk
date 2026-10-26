@@ -8,6 +8,8 @@ pub use unix::agent;
 pub use windows::agent;
 
 #[cfg(windows)]
+pub use windows::conpty;
+#[cfg(windows)]
 pub use windows::executor;
 
 #[cfg(unix)]

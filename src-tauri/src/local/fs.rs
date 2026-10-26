@@ -330,7 +330,16 @@ pub fn mutate(
         }
         "delete" => {
             let metadata = fs::symlink_metadata(&path).map_err(io)?;
-            if metadata.is_dir() && !metadata.is_symlink() {
+            #[cfg(windows)]
+            let directory_link = {
+                use std::os::windows::fs::FileTypeExt;
+                metadata.file_type().is_symlink_dir()
+            };
+            #[cfg(not(windows))]
+            let directory_link = false;
+            if directory_link {
+                fs::remove_dir(path).map_err(io)?;
+            } else if metadata.is_dir() && !metadata.is_symlink() {
                 fs::remove_dir_all(path).map_err(io)?;
             } else {
                 fs::remove_file(path).map_err(io)?;

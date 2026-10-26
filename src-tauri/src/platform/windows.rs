@@ -1,6 +1,7 @@
 use crate::error::{AppError, AppResult};
 use russh::keys::agent::client::{AgentClient, AgentStream};
 
+pub mod conpty;
 pub mod executor;
 
 pub async fn agent(kind: &str) -> AppResult<AgentClient<Box<dyn AgentStream + Send + Unpin>>> {

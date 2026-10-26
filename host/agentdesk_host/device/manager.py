@@ -219,4 +219,4 @@ def instructions(config: Path, device_os: str, project_path: str) -> str:
     else:
         usage = "Send a shell script through stdin to ssh -F " + shlex.quote(str(config)) + " device-script."
         location = "The project is on the user's " + device_os + " computer."
-    return location + " Native file tools operate on the server working directory. Use the device-script SSH alias for project operations; the device alias provides direct commands.\n" + usage
+    return location + " Native file tools operate on the server working directory. Use the device-script SSH alias with a complete stdin script for project operations.\n" + usage
