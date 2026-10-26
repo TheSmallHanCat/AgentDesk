@@ -30,6 +30,7 @@ class AgentCapability:
     sandboxAvailable: bool | None = None
     authStatus: Literal['missing', 'loggedOut', 'loggedIn', 'failed', 'checking'] | None = None
     nativeTerminal: bool | None = None
+    name: str | None = None
 
 
 @dataclass(kw_only=True)
@@ -438,7 +439,7 @@ class SyncUnsubscribeParams:
 
 @dataclass(kw_only=True)
 class DeviceOfflineParams:
-    pass
+    generation: str | None = None
 
 
 @dataclass(kw_only=True)
@@ -517,3 +518,13 @@ class LoginStateNotification:
     jsonrpc: Literal['2.0']
     method: Literal['login.state']
     params: LoginState
+
+
+@dataclass(kw_only=True)
+class DeviceProjectParams:
+    projectId: str
+
+
+@dataclass(kw_only=True)
+class DeviceProjectResult:
+    enabled: bool

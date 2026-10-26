@@ -20,7 +20,7 @@ const chat = useChatStore()
 const terminalOptions = computed(() =>
   Object.entries(chat.agents[project.value?.connectionId ?? ''] ?? {})
     .filter(([, caps]) => caps.nativeTerminal)
-    .map(([id, caps]) => ({ label: id, key: id, disabled: !caps.installed })),
+    .map(([id, caps]) => ({ label: caps.name ?? id, key: id, disabled: !caps.installed })),
 )
 const creating = ref<Project>()
 const renaming = ref<{ project: Project; id: string }>()

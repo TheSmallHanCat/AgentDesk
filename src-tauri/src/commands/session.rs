@@ -172,10 +172,10 @@ pub async fn run_send(
     client_msg_id: Option<String>,
     script: Option<Value>,
 ) -> AppResult<Reply<Value>> {
-    let client = project_client(&state, &target).await?;
     if crate::local::fs::local(&state.db, &target)? {
         state.local_channels.require(&target).await?;
     }
+    let client = project_client(&state, &target).await?;
     let id = client_msg_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let mut params = json!({"sessionId":session_id(&target)?,"text":text,"clientMsgId":id});
     if let Some(script) = script {
@@ -191,10 +191,10 @@ pub async fn run_append(
     text: String,
     client_msg_id: String,
 ) -> AppResult<Reply<Value>> {
-    let client = project_client(&state, &target).await?;
     if crate::local::fs::local(&state.db, &target)? {
         state.local_channels.require(&target).await?;
     }
+    let client = project_client(&state, &target).await?;
     Ok(target.reply(
         client
             .request(

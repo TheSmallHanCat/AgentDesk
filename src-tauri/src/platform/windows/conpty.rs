@@ -65,6 +65,7 @@ impl Drop for Console {
 }
 struct Attributes {
     buffer: Vec<usize>,
+    initialized: bool,
 }
 impl Attributes {
     fn new(console: HPCON) -> AppResult<Self> {
@@ -72,6 +73,7 @@ impl Attributes {
         unsafe { InitializeProcThreadAttributeList(null_mut(), 1, 0, &mut bytes) };
         let mut this = Self {
             buffer: vec![0; bytes.div_ceil(std::mem::size_of::<usize>())],
+            initialized: false,
         };
         if unsafe {
             InitializeProcThreadAttributeList(this.buffer.as_mut_ptr().cast(), 1, 0, &mut bytes)
@@ -79,6 +81,7 @@ impl Attributes {
         {
             return Err(failure(io::Error::last_os_error()));
         }
+        this.initialized = true;
         if unsafe {
             UpdateProcThreadAttribute(
                 this.buffer.as_mut_ptr().cast(),
@@ -98,7 +101,9 @@ impl Attributes {
 }
 impl Drop for Attributes {
     fn drop(&mut self) {
-        unsafe { DeleteProcThreadAttributeList(self.buffer.as_mut_ptr().cast()) };
+        if self.initialized {
+            unsafe { DeleteProcThreadAttributeList(self.buffer.as_mut_ptr().cast()) };
+        }
     }
 }
 #[derive(Debug)]
@@ -249,6 +254,7 @@ pub fn spawn(command: CommandBuilder, size: PtySize) -> AppResult<Spawned> {
 mod tests {
     use super::*;
     #[test]
+    #[ignore = "Requires the fixed bundled PowerShell resources; starts an immediate child process"]
     fn first_instruction_child_is_owned_by_the_job() {
         use std::{
             path::Path,

@@ -4,6 +4,7 @@ import { ref, watch } from 'vue'
 import type { Target, FileDocument, Reply, Project } from '../types.ts'
 import { target, unwrap, sameResource, RequestGuard } from '../utils/target.ts'
 import { call } from '../utils/api.ts'
+import { useLoginStore } from './login.ts'
 interface BaseTab {
   id: string
   target: Target
@@ -65,7 +66,12 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       id,
       type: 'terminal',
       target: target(project.connectionId, project.id, project.deviceLocal),
-      title: kind === 'shell' ? 'Shell' : kind + ' · ' + i18n.global.t('workbench.independent'),
+      title:
+        kind === 'shell'
+          ? 'Shell'
+          : (useLoginStore().agents[project.connectionId]?.[kind]?.name ?? kind) +
+            ' · ' +
+            i18n.global.t('workbench.independent'),
       path,
       error: '',
       kind,

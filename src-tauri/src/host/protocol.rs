@@ -46,6 +46,8 @@ pub struct AgentCapability {
     pub auth_status: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native_terminal: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -539,7 +541,10 @@ pub struct SyncUnsubscribeParams {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct DeviceOfflineParams {}
+pub struct DeviceOfflineParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generation: Option<String>,
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -634,4 +639,16 @@ pub struct LoginStateNotification {
     pub jsonrpc: String,
     pub method: String,
     pub params: LoginState,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DeviceProjectParams {
+    pub project_id: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DeviceProjectResult {
+    pub enabled: bool,
 }

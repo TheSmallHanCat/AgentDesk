@@ -24,6 +24,7 @@ export interface AgentCapability {
   sandboxAvailable?: boolean;
   authStatus?: "missing" | "loggedOut" | "loggedIn" | "failed" | "checking";
   nativeTerminal?: boolean;
+  name?: string;
 }
 
 export interface Target {
@@ -371,6 +372,7 @@ export interface SyncUnsubscribeParams {
 }
 
 export interface DeviceOfflineParams {
+  generation?: string;
 }
 
 export interface AgentTerminalStartParams {
@@ -437,4 +439,12 @@ export interface LoginStateNotification {
   jsonrpc: "2.0";
   method: "login.state";
   params: LoginState;
+}
+
+export interface DeviceProjectParams {
+  projectId: string;
+}
+
+export interface DeviceProjectResult {
+  enabled: boolean;
 }

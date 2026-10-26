@@ -1098,7 +1098,11 @@
     "DeviceOfflineParams": {
       "type": "object",
       "additionalProperties": false,
-      "properties": {},
+      "properties": {
+        "generation": {
+          "type": "string"
+        }
+      },
       "required": []
     },
     "AgentTerminalStartParams": {
@@ -1323,6 +1327,30 @@
         "method",
         "params"
       ]
+    },
+    "DeviceProjectParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "projectId"
+      ],
+      "properties": {
+        "projectId": {
+          "type": "string"
+        }
+      }
+    },
+    "DeviceProjectResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        }
+      }
     }
   },
   "x-methods": {
@@ -1657,6 +1685,22 @@
       },
       "result": {
         "$ref": "#/$defs/LoginAcceptedResult"
+      }
+    },
+    "device.project.enable": {
+      "params": {
+        "$ref": "#/$defs/DeviceProjectParams"
+      },
+      "result": {
+        "$ref": "#/$defs/DeviceProjectResult"
+      }
+    },
+    "device.project.revoke": {
+      "params": {
+        "$ref": "#/$defs/DeviceProjectParams"
+      },
+      "result": {
+        "$ref": "#/$defs/DeviceProjectResult"
       }
     }
   },

@@ -36,7 +36,7 @@ const blank = (): Project => ({
 const form = reactive<Project>(blank())
 const agentOptions = computed(() =>
   Object.entries(login.agents[form.connectionId] ?? {}).map(([id, caps]) => ({
-    label: id,
+    label: caps.name ?? id,
     value: id,
     disabled: !caps.installed,
   })),
@@ -309,7 +309,11 @@ onUnmounted(() => {
             ><n-button
               type="primary"
               :loading="busy"
-              :disabled="!form.name.trim() || !form.connectionId"
+              :disabled="
+                !form.name.trim() ||
+                !form.connectionId ||
+                (!!form.deviceLocal && form.permissionMode === 'plan')
+              "
               @click="save()"
               >{{ t('common.save') }}</n-button
             >

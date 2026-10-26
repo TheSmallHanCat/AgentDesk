@@ -139,13 +139,15 @@ class DeviceManager:
     def enable_project(self, device_id: str, owner: object, key: str) -> None:
         self.owned(device_id, owner)["projects"].add(key)
 
-    async def revoke_project(self, device_id: str, owner: object, key: str) -> None:
+    async def revoke_project(self, device_id: str, owner: object, key: str, session_ids: tuple[str, ...] = ()) -> None:
         entry = self.owned(device_id, owner)
         entry["projects"].discard(key)
-        for session_id, project in list(entry["sessions"].items()):
-            if project == key:
-                (self.home / "session-ssh" / (session_id + ".conf")).unlink(missing_ok=True)
-                del entry["sessions"][session_id]
+        sessions = set(session_ids) | {sid for sid, project in entry["sessions"].items() if project == key}
+        for session_id in sessions:
+            if not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", session_id):
+                raise AdapterError("E_TARGET", "device.session", "Invalid session identifier")
+            (self.home / "session-ssh" / (session_id + ".conf")).unlink(missing_ok=True)
+            entry["sessions"].pop(session_id, None)
         if not entry["projects"]:
             await self.offline(device_id, owner)
 

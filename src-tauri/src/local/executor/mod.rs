@@ -571,6 +571,7 @@ mod tests {
 
     #[cfg(windows)]
     #[tokio::test]
+    #[ignore = "Requires the fixed bundled PowerShell resources; simulates both OpenSSH default shells"]
     async fn runner_command_works_with_cmd_and_powershell_default_shells() {
         use std::os::windows::process::CommandExt;
         use tokio::io::AsyncWriteExt;

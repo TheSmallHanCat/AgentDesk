@@ -14,7 +14,9 @@ struct Entry {
     state: String,
     finished: watch::Receiver<bool>,
 }
+#[cfg(any(windows, test))]
 struct Completion(watch::Sender<bool>);
+#[cfg(any(windows, test))]
 impl Drop for Completion {
     fn drop(&mut self) {
         self.0.send_replace(true);
@@ -24,6 +26,7 @@ impl Drop for Completion {
 pub struct LocalChannels {
     entries: Mutex<HashMap<String, Entry>>,
 }
+#[cfg(windows)]
 fn cancelled() -> AppError {
     AppError::new(
         "E_CANCELLED",
@@ -54,6 +57,7 @@ impl LocalChannels {
         }
         Ok(())
     }
+    #[cfg(any(windows, test))]
     async fn reserve(
         &self,
         target: &Target,

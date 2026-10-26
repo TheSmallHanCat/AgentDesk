@@ -82,7 +82,14 @@ def test_project_authorization_revoke_and_reconnect_takeover(device_home, monkey
             await service.request(client, 'device.project.enable', {'projectId': id})
             await service.request(client, 'run.send', {'sessionId': session['id'], 'clientMsgId': id, 'text': 'Inspect', 'script': []})
             await finish(service)
+        pending = await service.request(client, 'run.send', {'sessionId': sessions[0]['id'], 'clientMsgId': 'active-one', 'text': 'Inspect', 'script': [{'type': 'sleep', 'seconds': 60}]})
         await service.request(client, 'device.project.revoke', {'projectId': 'one'})
+        with pytest.raises(AdapterError) as error:
+            await service.request(client, 'run.append', {'sessionId': sessions[0]['id'], 'runId': pending['runId'], 'clientMsgId': 'revoked-append', 'text': 'Inspect'})
+        assert error.value.code == 'E_DEVICE_UNAUTHORIZED'
+        assert service.db.one("SELECT * FROM client_msgs WHERE client_msg_id='revoked-append'") is None
+        await service.request(client, 'run.stop', {'sessionId': sessions[0]['id'], 'runId': pending['runId']})
+        await finish(service)
         assert (root / 'keys/id').exists()
         assert not (device_home / 'session-ssh' / (sessions[0]['id'] + '.conf')).exists()
         with pytest.raises(AdapterError):
@@ -96,6 +103,13 @@ def test_project_authorization_revoke_and_reconnect_takeover(device_home, monkey
         assert fresh['generation'] != old['generation']
         await service.request(client, 'device.offline', {'generation': old['generation']})
         assert service.devices.entries[client.device_id]['owner'] is replacement
+        # Session entries retained for reconnect must also be removed by revoke,
+        # even before a new run repopulates the new registration's session map.
+        stale_config = device_home / 'session-ssh' / (sessions[0]['id'] + '.conf')
+        stale_config.write_text('retained Include entry\n', encoding='utf-8')
+        await service.request(replacement, 'device.project.enable', {'projectId': 'one'})
+        await service.request(replacement, 'device.project.revoke', {'projectId': 'one'})
+        assert not stale_config.exists()
         await service.close()
     asyncio.run(check())
 

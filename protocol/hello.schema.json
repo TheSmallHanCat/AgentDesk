@@ -103,6 +103,9 @@
         },
         "nativeTerminal": {
           "type": "boolean"
+        },
+        "name": {
+          "type": "string"
         }
       },
       "required": [

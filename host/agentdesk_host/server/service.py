@@ -126,6 +126,7 @@ class HostService:
             except Exception:
                 result = {"installed": False, "available": False, "loggedIn": False, "authStatus": "failed", "streaming": False, "models": [], "permissionModes": [], "reason": "Agent detection failed"}
             result.setdefault("authStatus", "loggedIn" if result.get("loggedIn") else "loggedOut" if result.get("installed") else "missing")
+            result["name"] = getattr(self.adapters[agent], "name", agent)
             result["nativeTerminal"] = callable(getattr(self.adapters[agent], "terminal_command", None))
             self.capability_cache[agent] = result
             self.capability_expiry[agent] = asyncio.get_running_loop().time() + 600
@@ -425,7 +426,8 @@ class HostService:
             if method == "device.project.enable":
                 self.devices.enable_project(client.device_id, client, key)
             else:
-                await self.devices.revoke_project(client.device_id, client, key)
+                sessions = tuple(row["id"] for row in self.db.all("SELECT id FROM sessions WHERE project_id=?", (project["id"],)))
+                await self.devices.revoke_project(client.device_id, client, key, sessions)
             return {"enabled": method == "device.project.enable"}
         if method in {"device.tunnel.close", "device.offline"}:
             await self.devices.offline(client.device_id, client, params.get("generation"))
@@ -496,6 +498,9 @@ class HostService:
         project = self._project(required(params, "projectId"))
         if project["archived"]:
             raise fail("E_CONFLICT", "session.create", "Project is archived", "Restore the project before creating a session")
+        mode = required(params, "permissionMode")
+        if project["kind"] == "local" and mode == "plan":
+            raise fail("E_LOCAL_PLAN_UNSUPPORTED", "session.create", "Plan mode is unavailable for local projects", "The SSH execution channel cannot enforce read-only access on the device; use a remote project for plan mode")
         agent = required(params, "agent")
         adapter = self.adapters.get(agent)
         if not adapter:
@@ -507,9 +512,6 @@ class HostService:
             raise fail("E_NOT_LOGGED_IN", "session.create", "Agent is not logged in", "Complete official CLI login from Environment")
         if not capabilities.get("available", False):
             raise fail("E_CAPABILITY", "session.create", "Agent is unavailable", str(capabilities.get("reason", "Check Environment")))
-        mode = required(params, "permissionMode")
-        if project["kind"] == "local" and mode == "plan":
-            raise fail("E_LOCAL_PLAN_UNSUPPORTED", "session.create", "Plan mode is unavailable for local projects", "The SSH execution channel cannot enforce read-only access on the device; use a remote project for plan mode")
         if mode not in capabilities.get("permissionModes", []):
             raise fail("E_CAPABILITY", "session.create", "Unsupported permission mode", "Choose an available mode")
         model = required(params, "model")

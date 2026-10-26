@@ -62,7 +62,7 @@ watch(
   selected,
   () => {
     model.value = models.value[0]?.value ?? ''
-    mode.value = modes.value[0]?.value ?? 'default'
+    mode.value = modes.value.find((value) => !value.disabled)?.value ?? 'default'
   },
   { immediate: true },
 )

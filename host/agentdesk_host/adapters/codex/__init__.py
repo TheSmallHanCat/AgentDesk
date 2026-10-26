@@ -30,6 +30,7 @@ class CodexLoginParser(LoginParser):
 
 
 class CodexAdapter:
+    name = "Codex"
     kind = "codex"
     login_parser = CodexLoginParser
     local_execution_policy = {"sandbox": "workspace-write", "networkAccess": True, "version": 1}

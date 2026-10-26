@@ -29,6 +29,7 @@ class ClaudeLoginParser(LoginParser):
 
 class ClaudeAdapter:
     kind = "claude"
+    name = "Claude Code"
     login_parser = ClaudeLoginParser
 
     def __init__(self):
