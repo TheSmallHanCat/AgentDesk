@@ -39,6 +39,7 @@ class HostServer:
             os.chmod(self.socket_path, 0o600)
         finally:
             os.umask(previous_umask)
+        self.service.start_detection()
 
     async def _accept(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         task = asyncio.current_task()

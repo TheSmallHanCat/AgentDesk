@@ -135,6 +135,7 @@ def capability(**values) -> dict:
         "version": None, "reason": "E_AGENT_NOT_INSTALLED", "models": [],
         "permissionModes": ["default", "plan"], "streaming": False,
         "resume": False, "approvals": False, "stop": False, "appendInput": False,
+        "authStatus": "missing",
         **values,
     }
 

@@ -6,14 +6,32 @@ import asyncio
 import json
 import os
 from pathlib import Path
+import re
 
 from ..base import AdapterError, RunContext, RunHandle
 from ..native_common import cached_capabilities, capability, command, installed_codex, version_of
 from ..native_rpc import NativeRpc
+from ..login import LoginParser
+
+
+class CodexLoginParser(LoginParser):
+    def parse(self, text: str) -> dict:
+        # Device-code instructions ask the user to type into the browser.
+        result = {"needsInput": bool(re.search(r"(?:paste|enter)[^\n]{0,35}(?:authorization code|auth code)[^\n]{0,20}(?:here|:)|请[^\n]{0,20}(?:粘贴|输入)[^\n]{0,20}授权码", text, re.I))}
+        if url := self.url(text):
+            result["url"] = url
+        if match := re.search(r"(?:^|\n)\s*([A-Z0-9]{4,8}-[A-Z0-9]{4,8})\s*(?:\n|$)", text):
+            result["deviceCode"] = match.group(1)
+        elif match := re.search(r"(?:device|user|one[- ]time)\s+code\s*[:：]\s*([A-Z0-9]{4,8}-[A-Z0-9]{4,8})", text, re.I):
+            result["deviceCode"] = match.group(1)
+        if state := self.terminal_state(text):
+            result["state"] = state
+        return result
 
 
 class CodexAdapter:
     kind = "codex"
+    login_parser = CodexLoginParser
     local_execution_policy = {"sandbox": "workspace-write", "networkAccess": True, "version": 1}
 
     def __init__(self, executable: str | None = None):
@@ -32,15 +50,18 @@ class CodexAdapter:
         executable = self.path()
         result = capability()
         if executable:
+            result.update(installed=True, authStatus="failed")
             try:
                 code, output = await command([executable, "--version"])
-                result.update(installed=code == 0, version=version_of(output))
+                result.update(installed=True, version=version_of(output), authStatus="failed")
                 if code == 0:
                     async with NativeRpc(executable) as rpc:
                         account = await rpc.request("account/read", {"refreshToken": False})
+                        if not isinstance(account, dict) or "account" not in account or account["account"] is not None and not isinstance(account["account"], dict):
+                            raise ValueError("Invalid authentication status")
                         public = account.get("account")
                         logged_in = isinstance(public, dict)
-                        result.update(loggedIn=logged_in, accountType=public.get("type") if logged_in else None)
+                        result.update(loggedIn=logged_in, authStatus="loggedIn" if logged_in else "loggedOut", accountType=public.get("planType", public.get("type")) if logged_in else None)
                         models = []
                         cursor = None
                         for _ in range(10):
@@ -251,6 +272,12 @@ class CodexAdapter:
         if not executable:
             raise AdapterError("E_AGENT_NOT_INSTALLED", "codex.login", "Codex CLI is unavailable", "Install the official binary first")
         return [executable, "login", "--device-auth"]
+
+    def login_rpc(self):
+        executable = self.path()
+        if not executable:
+            raise AdapterError("E_AGENT_NOT_INSTALLED", "codex.login", "Codex CLI is unavailable")
+        return NativeRpc(executable)
 
     async def terminal_command(self):
         return [(await self.login_command())[0]]

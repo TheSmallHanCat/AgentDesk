@@ -7,14 +7,29 @@ import importlib.metadata
 import json
 import os
 from pathlib import Path
+import re
 import uuid
 
 from ..base import AdapterError, RunContext, RunHandle
 from ..native_common import ClaudeProcessGroup, cached_capabilities, capability, command, version_of
+from ..login import LoginParser
+
+
+class ClaudeLoginParser(LoginParser):
+    def parse(self, text: str) -> dict:
+        result = {"needsInput": bool(re.search(r"(?:paste|enter)[^\n]{0,50}(?:code|token)|请[^\n]{0,20}(?:粘贴|输入)[^\n]{0,20}(?:代码|授权码)", text, re.I))}
+        if url := self.url(text):
+            result["url"] = url
+        if match := re.search(r"(?:device|user|one[- ]time)\s+code\s*[:：]\s*([A-Z0-9]{4,8}-[A-Z0-9]{4,8})", text, re.I):
+            result["deviceCode"] = match.group(1)
+        if state := self.terminal_state(text):
+            result["state"] = state
+        return result
 
 
 class ClaudeAdapter:
     kind = "claude"
+    login_parser = ClaudeLoginParser
 
     def __init__(self):
         self._caps = None
@@ -38,10 +53,11 @@ class ClaudeAdapter:
         executable = self.executable()
         result = capability(permissionModes=["default", "acceptEdits", "plan"])
         if executable:
+            result.update(installed=True, authStatus="failed")
             try:
                 import claude_agent_sdk as sdk
                 code, output = await command([executable, "--version"])
-                result.update(installed=code == 0, version=version_of(output), sdkVersion=importlib.metadata.version("claude-agent-sdk"))
+                result.update(installed=True, version=version_of(output), sdkVersion=importlib.metadata.version("claude-agent-sdk"), authStatus="failed")
                 if code != 0:
                     result["reason"] = "E_AGENT_EXECUTABLE"
                 else:
@@ -49,10 +65,13 @@ class ClaudeAdapter:
                     try:
                         auth = json.loads(auth_output)
                     except (ValueError, UnicodeError):
-                        auth = {}
+                        raise ValueError("Invalid authentication status") from None
+                    if not isinstance(auth, dict) or type(auth.get("loggedIn")) is not bool or auth_code not in (0, 1) or auth_code == 1 and auth["loggedIn"]:
+                        raise ValueError("Invalid authentication status")
                     # Keep only public status fields; discard all other output.
                     logged_in = auth.get("loggedIn") is True and auth_code == 0
-                    result.update(loggedIn=logged_in, accountType=auth.get("subscriptionType") if isinstance(auth.get("subscriptionType"), str) else None)
+                    account_type = auth.get("subscriptionType") or auth.get("authMethod")
+                    result.update(loggedIn=logged_in, authStatus="loggedIn" if logged_in else "loggedOut", accountType=account_type if logged_in and isinstance(account_type, str) else None)
                     process_group = ClaudeProcessGroup(executable)
                     client = sdk.ClaudeSDKClient(options=sdk.ClaudeAgentOptions(cli_path=process_group.prepare(), stderr=lambda _: None))
                     try:

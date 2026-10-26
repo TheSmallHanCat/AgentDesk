@@ -90,6 +90,16 @@
         },
         "sandboxAvailable": {
           "type": "boolean"
+        },
+        "authStatus": {
+          "type": "string",
+          "enum": [
+            "missing",
+            "loggedOut",
+            "loggedIn",
+            "failed",
+            "checking"
+          ]
         }
       },
       "required": [

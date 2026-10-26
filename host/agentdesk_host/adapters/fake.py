@@ -16,6 +16,7 @@ class FakeAdapter:
     async def capabilities(self) -> dict[str, Any]:
         return {
             "installed": True, "available": True, "loggedIn": True,
+            "authStatus": "loggedIn", "accountType": "fake",
             "version": "1.0", "models": [{"id": "fake-default", "name": "Scripted Agent"}],
             "permissionModes": ["default", "plan"], "streaming": True, "resume": True,
             "approvals": True, "stop": True, "appendInput": True,

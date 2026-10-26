@@ -42,6 +42,8 @@ pub struct AgentCapability {
     pub resources_available: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sandbox_available: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_status: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -469,12 +471,6 @@ pub type RunCompactParams = std::collections::BTreeMap<String, JsonValue>;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct AgentLoginStartParams {
-    pub agent: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AgentLogoutParams {
     pub agent: String,
 }
@@ -498,16 +494,10 @@ pub struct ApprovalServerResult {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct AgentLoginStartResult {
-    pub agent: String,
-    pub transport: String,
-    pub command: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AgentLogoutResult {
     pub logged_out: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capability: Option<AgentCapability>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -568,4 +558,78 @@ pub struct DeviceRegisterResult {
 pub struct DeviceTunnelReadyResult {
     pub state: String,
     pub generation: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LoginStartParams {
+    pub agent: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LoginStartResult {
+    pub login_id: String,
+    pub agent: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LoginRespondParams {
+    pub login_id: String,
+    pub text: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LoginCancelParams {
+    pub login_id: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LoginAcceptedResult {
+    pub accepted: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LoginPrompt {
+    pub login_id: String,
+    pub agent: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_code: Option<String>,
+    pub needs_input: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_output: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LoginState {
+    pub login_id: String,
+    pub agent: String,
+    pub state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capability: Option<AgentCapability>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LoginPromptNotification {
+    pub jsonrpc: String,
+    pub method: String,
+    pub params: LoginPrompt,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LoginStateNotification {
+    pub jsonrpc: String,
+    pub method: String,
+    pub params: LoginState,
 }

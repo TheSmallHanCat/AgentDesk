@@ -28,6 +28,7 @@ class AgentCapability:
     handshake: bool | None = None
     resourcesAvailable: bool | None = None
     sandboxAvailable: bool | None = None
+    authStatus: Literal['missing', 'loggedOut', 'loggedIn', 'failed', 'checking'] | None = None
 
 
 @dataclass(kw_only=True)
@@ -377,15 +378,10 @@ RunCompactParams = dict[str, JsonValue]
 
 
 @dataclass(kw_only=True)
-class AgentLoginStartParams:
-    agent: str
-
-
-@dataclass(kw_only=True)
 class AgentLogoutParams:
     agent: str
 
-ProtocolErrorCode = Literal['E_PROTOCOL_VERSION', 'E_NOT_LOGGED_IN', 'E_AGENT_NOT_INSTALLED', 'E_SESSION_BUSY', 'E_NATIVE_MISSING', 'E_DEVICE_OFFLINE', 'E_TUNNEL_NOT_READY', 'E_CAPABILITY', 'E_ALREADY_RESOLVED', 'E_INVALID_PARAMS', 'E_NOT_FOUND', 'E_CONFLICT', 'E_FRAME_TOO_LARGE', 'E_INTERNAL', 'E_METHOD_NOT_FOUND', 'E_AGENT', 'E_HOST_DRAINING', 'E_AGENT_EXITED', 'E_TIMEOUT', 'E_CLI_VERSION', 'E_SANDBOX', 'E_AGENT_PROBE', 'E_AGENT_EXECUTABLE']
+ProtocolErrorCode = Literal['E_PROTOCOL_VERSION', 'E_NOT_LOGGED_IN', 'E_AGENT_NOT_INSTALLED', 'E_SESSION_BUSY', 'E_NATIVE_MISSING', 'E_DEVICE_OFFLINE', 'E_TUNNEL_NOT_READY', 'E_CAPABILITY', 'E_ALREADY_RESOLVED', 'E_INVALID_PARAMS', 'E_NOT_FOUND', 'E_CONFLICT', 'E_FRAME_TOO_LARGE', 'E_INTERNAL', 'E_METHOD_NOT_FOUND', 'E_AGENT', 'E_HOST_DRAINING', 'E_AGENT_EXITED', 'E_TIMEOUT', 'E_CLI_VERSION', 'E_SANDBOX', 'E_AGENT_PROBE', 'E_AGENT_EXECUTABLE', 'E_LOGIN_BUSY', 'E_LOGIN_GONE', 'E_LOGIN_STATE', 'E_LOGIN_INPUT', 'E_LOGIN_PROTOCOL', 'E_LOGIN_FAILED', 'E_LOGIN_VERIFY', 'E_LOGIN_EXPIRED', 'E_LOGIN_CANCELLED', 'E_NATIVE_UNSUPPORTED', 'E_TARGET', 'E_LOGOUT_VERIFY']
 
 
 @dataclass(kw_only=True)
@@ -402,15 +398,9 @@ class ApprovalServerResult:
 
 
 @dataclass(kw_only=True)
-class AgentLoginStartResult:
-    agent: str
-    transport: Literal['pty']
-    command: str
-
-
-@dataclass(kw_only=True)
 class AgentLogoutResult:
     loggedOut: Literal[True]
+    capability: AgentCapability | None = None
 
 
 @dataclass(kw_only=True)
@@ -466,3 +456,63 @@ class DeviceRegisterResult:
 class DeviceTunnelReadyResult:
     state: str
     generation: str
+
+
+@dataclass(kw_only=True)
+class LoginStartParams:
+    agent: str
+
+
+@dataclass(kw_only=True)
+class LoginStartResult:
+    loginId: str
+    agent: str
+
+
+@dataclass(kw_only=True)
+class LoginRespondParams:
+    loginId: str
+    text: str
+
+
+@dataclass(kw_only=True)
+class LoginCancelParams:
+    loginId: str
+
+
+@dataclass(kw_only=True)
+class LoginAcceptedResult:
+    accepted: bool
+
+
+@dataclass(kw_only=True)
+class LoginPrompt:
+    loginId: str
+    agent: str
+    url: str | None = None
+    deviceCode: str | None = None
+    needsInput: bool
+    rawOutput: str | None = None
+
+
+@dataclass(kw_only=True)
+class LoginState:
+    loginId: str
+    agent: str
+    state: Literal['starting', 'waiting', 'succeeded', 'failed', 'expired', 'cancelled']
+    reason: str | None = None
+    capability: AgentCapability | None = None
+
+
+@dataclass(kw_only=True)
+class LoginPromptNotification:
+    jsonrpc: Literal['2.0']
+    method: Literal['login.prompt']
+    params: LoginPrompt
+
+
+@dataclass(kw_only=True)
+class LoginStateNotification:
+    jsonrpc: Literal['2.0']
+    method: Literal['login.state']
+    params: LoginState

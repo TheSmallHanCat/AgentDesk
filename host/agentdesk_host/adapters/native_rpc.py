@@ -104,7 +104,8 @@ class NativeRpc:
                         native_error = message.get("error", {})
                         text = str(native_error.get("message", "")).lower()
                         missing = any(marker in text for marker in ("not found", "no rollout", "does not exist", "failed to load session"))
-                        future.set_exception(AdapterError("E_NATIVE_MISSING" if missing else "E_AGENT", "codex.rpc", "Native request was rejected", "Check CLI compatibility and session state"))
+                        unsupported = native_error.get("code") == -32601 or native_error.get("code") == -32602 and "chatgptdevicecode" in text and any(marker in text for marker in ("unknown variant", "unrecognized variant", "unsupported", "not supported"))
+                        future.set_exception(AdapterError("E_NATIVE_UNSUPPORTED" if unsupported else "E_NATIVE_MISSING" if missing else "E_AGENT", "codex.rpc", "Native request was rejected", "Check CLI compatibility and session state"))
                     else:
                         future.set_result(message.get("result", {}))
         except asyncio.CancelledError:

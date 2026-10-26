@@ -50,6 +50,32 @@ for line in sys.stdin:
     asyncio.run(check())
 
 
+@pytest.mark.parametrize("code,message,expected", [
+    (-32601, "Method not found", "E_NATIVE_UNSUPPORTED"),
+    (-32602, "unknown variant `chatgptDeviceCode`", "E_NATIVE_UNSUPPORTED"),
+    (-32602, "invalid params", "E_AGENT"),
+    (-32000, "unknown variant `chatgptDeviceCode`", "E_AGENT"),
+])
+def test_native_device_fallback_requires_explicit_unsupported_evidence(tmp_path, code, message, expected):
+    script = tmp_path / "login_rpc.py"
+    script.write_text('''import sys,json
+for line in sys.stdin:
+ m=json.loads(line)
+ if m.get('method')=='initialize':
+  print(json.dumps({'id':m['id'],'result':{}}),flush=True)
+ elif m.get('method')=='account/login/start':
+  print(json.dumps({'id':m['id'],'error':''' + repr({"code": code, "message": message + " https://login.example.invalid/secret FAKE-12345"}) + '''}),flush=True)
+''', encoding="utf-8")
+
+    async def check():
+        async with NativeRpc([sys.executable, str(script)]) as rpc:
+            with pytest.raises(AdapterError) as error:
+                await rpc.request("account/login/start", {"type": "chatgptDeviceCode"})
+            assert error.value.code == expected
+            assert "example.invalid" not in str(error.value) and "FAKE-12345" not in str(error.value)
+    asyncio.run(check())
+
+
 def test_codex_maps_tool_output_reasoning_usage_and_steer():
     async def check():
         events = []

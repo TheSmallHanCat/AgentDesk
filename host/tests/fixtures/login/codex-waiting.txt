@@ -1,0 +1,12 @@
+Welcome to Codex [v0.164.0]
+Follow these steps to sign in with ChatGPT using device code authorization:
+
+1. Open this link in your browser and sign in to your account
+
+  [94mhttps://login.example.invalid/codex/device[0m
+
+2. Enter this one-time code (expires in 15 minutes)
+
+  [94mFAKE-12345[0m
+
+Continue only if you started this login in Codex. Never share this code.

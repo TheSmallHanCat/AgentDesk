@@ -16,6 +16,7 @@ from .. import __version__
 from ..adapters.base import AdapterError, AgentAdapter, RunContext, RunHandle
 from ..device.manager import DeviceManager, instructions, project_key
 from ..store.database import Database, now
+from .login import LoginManager
 
 MAX_FRAME = 4 * 1024 * 1024
 MAX_EVENT = 96 * 1024
@@ -71,6 +72,7 @@ class HostService:
         self.capability_cache: dict[str, dict[str, Any]] = {}
         self.capability_expiry: dict[str, float] = {}
         self.capability_tasks: dict[str, asyncio.Task] = {}
+        self.logins = LoginManager(self._refresh_agent_capability)
         device_options = device_options or {}
         self.devices = DeviceManager(self.home, self._device_state, self._device_interrupt, wait_timeout=device_options.get("wait_timeout", 60), grace=device_options.get("grace", 300))
         self.draining_until = 0.0
@@ -98,7 +100,21 @@ class HostService:
                 self.devices.cleanup(self.devices.entry(device["id"]))
 
     def cached_capabilities(self) -> dict[str, Any]:
-        return {agent: self.capability_cache.get(agent, {"installed": False, "available": False, "loggedIn": False, "streaming": False, "models": [], "permissionModes": [], "reason": "Agent detection pending"}) for agent in self.adapters}
+        return {agent: self.capability_cache.get(agent, {"installed": False, "available": False, "loggedIn": False, "authStatus": "checking", "streaming": False, "models": [], "permissionModes": [], "reason": "Agent detection pending"}) for agent in self.adapters}
+
+    def start_detection(self) -> None:
+        for agent in self.adapters:
+            self._probe_agent(agent)
+
+    async def _refresh_agent_capability(self, agent: str) -> dict[str, Any]:
+        previous = self.capability_tasks.get(agent)
+        if previous and not previous.done():
+            await asyncio.shield(previous)
+        adapter = self.adapters[agent]
+        if hasattr(adapter, "_caps"):
+            adapter._caps = None
+        self.capability_expiry.pop(agent, None)
+        return await asyncio.shield(self._probe_agent(agent))
 
     def _probe_agent(self, agent: str) -> asyncio.Task:
         existing = self.capability_tasks.get(agent)
@@ -108,7 +124,8 @@ class HostService:
             try:
                 result = await self.adapters[agent].capabilities()
             except Exception:
-                result = {"installed": False, "available": False, "loggedIn": False, "streaming": False, "models": [], "permissionModes": [], "reason": "Agent detection failed"}
+                result = {"installed": False, "available": False, "loggedIn": False, "authStatus": "failed", "streaming": False, "models": [], "permissionModes": [], "reason": "Agent detection failed"}
+            result.setdefault("authStatus", "loggedIn" if result.get("loggedIn") else "loggedOut" if result.get("installed") else "missing")
             self.capability_cache[agent] = result
             self.capability_expiry[agent] = asyncio.get_running_loop().time() + 600
             return result
@@ -197,6 +214,7 @@ class HostService:
 
     async def disconnect(self, client: Client) -> None:
         self.clients.discard(client)
+        await self.logins.disconnect(client)
         await self.devices.disconnect(client)
         client.subscriptions.clear()
         client.subscription_tokens.clear()
@@ -232,7 +250,7 @@ class HostService:
             raise fail("E_PROTOCOL_VERSION", "hello", "Handshake is required", "Call hello before business methods")
         if method == "host.prepareShutdown":
             async with self.mutation_lock:
-                if self.handles or self.db.one("SELECT id FROM runs WHERE finished_at IS NULL LIMIT 1"):
+                if self.handles or self.logins.sessions or self.db.one("SELECT id FROM runs WHERE finished_at IS NULL LIMIT 1"):
                     raise fail("E_SESSION_BUSY", method, "Host has active runs", "Stop active runs before maintenance")
                 clock = asyncio.get_running_loop().time()
                 if self.draining_until > clock and self.draining_device != client.device_id:
@@ -251,7 +269,11 @@ class HostService:
             return await self.capabilities()
         if method == "env.probe":
             return {"layers": [{"name": "system", "status": "ready", "detail": f"{platform.system()} {platform.machine()}"}, {"name": "host", "status": "ready", "detail": __version__}], "agents": await self.capabilities(), "host": {"installed": True, "running": True, "version": __version__, "hostId": self.db.host_id, "activeRuns": len(self.handles)}}
-        if method in {"agent.login.start", "agent.terminal.start", "agent.logout"}:
+        if method == "login.respond":
+            return await self.logins.respond(client, required(params, "loginId"), required(params, "text"))
+        if method == "login.cancel":
+            return await self.logins.cancel(client, required(params, "loginId"))
+        if method in {"login.start", "agent.terminal.start", "agent.logout"}:
             agent = required(params, "agent")
             adapter = self.adapters.get(agent)
             if not adapter:
@@ -267,22 +289,24 @@ class HostService:
                 if not isinstance(args, list) or not args or any(not isinstance(arg, str) or not arg for arg in args):
                     raise fail("E_CAPABILITY", method, "Agent terminal command is unavailable")
                 return {"command": shlex.join(args)}
-            if method == "agent.login.start":
-                command = getattr(adapter, "login_command", None)
-                if command is None:
-                    raise fail("E_CAPABILITY", method, "Agent has no interactive login workflow")
-                args = await command()
-                if not isinstance(args, list) or not args or any(not isinstance(arg, str) or not arg for arg in args):
-                    raise fail("E_CAPABILITY", method, "Agent login command is unavailable")
-                return {"agent": agent, "transport": "pty", "command": shlex.join(args)}
+            if method == "login.start":
+                async with self.mutation_lock:
+                    if self.draining_until > asyncio.get_running_loop().time():
+                        raise fail("E_HOST_DRAINING", method, "Host is preparing maintenance")
+                    return self.logins.start(client, agent, adapter)
             logout = getattr(adapter, "logout", None)
             if logout is None:
                 raise fail("E_CAPABILITY", method, "Agent does not support logout")
-            if self.db.one("SELECT r.id FROM runs r JOIN sessions s ON s.id=r.session_id WHERE s.agent=? AND r.finished_at IS NULL LIMIT 1", (agent,)):
-                raise fail("E_SESSION_BUSY", method, "Agent has active runs", "Finish or stop all runs for this Agent before logging out")
-            await logout()
-            self.capability_expiry.pop(agent, None)
-            return {"loggedOut": True}
+            async with self.mutation_lock:
+                if agent in self.logins.agents:
+                    raise fail("E_LOGIN_BUSY", method, "Agent has an active login", "Cancel the login before signing out")
+                if self.db.one("SELECT r.id FROM runs r JOIN sessions s ON s.id=r.session_id WHERE s.agent=? AND r.finished_at IS NULL LIMIT 1", (agent,)):
+                    raise fail("E_SESSION_BUSY", method, "Agent has active runs", "Finish or stop all runs for this Agent before logging out")
+                await logout()
+                capability = await self._refresh_agent_capability(agent)
+                if capability.get("authStatus") != "loggedOut":
+                    raise fail("E_LOGOUT_VERIFY", method, "Logout status could not be confirmed", "Refresh Agent status and retry")
+                return {"loggedOut": True, "capability": capability}
         if method == "project.list":
             return [self._project(row["id"]) for row in self.db.all("SELECT id FROM projects ORDER BY created_at")]
         if method == "project.upsert":
@@ -824,6 +848,7 @@ class HostService:
                 await self._finish(run["session_id"], run["id"], "interrupted")
 
     async def close(self) -> None:
+        await self.logins.close()
         await self.devices.close()
         for task in self.capability_tasks.values():
             if not task.done():

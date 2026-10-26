@@ -275,7 +275,7 @@ def test_fake_long_output_size_is_total_characters_not_repeat_count(tmp_path):
     asyncio.run(check())
 
 
-def test_login_only_prepares_official_pty_command_and_logout_is_explicit_mock(tmp_path):
+def test_legacy_login_is_removed_and_logout_refreshes_status(tmp_path):
     class AccountAdapter(FakeAdapter):
         def __init__(self):
             self.logout_calls = 0
@@ -283,20 +283,23 @@ def test_login_only_prepares_official_pty_command_and_logout_is_explicit_mock(tm
             return ["/home/user/Agent Host/bin/codex", "login", "--device-auth"]
         async def logout(self):
             self.logout_calls += 1
+        async def capabilities(self):
+            return {**await super().capabilities(), "loggedIn": self.logout_calls == 0, "authStatus": "loggedIn" if self.logout_calls == 0 else "loggedOut"}
 
     async def check():
         adapter = AccountAdapter()
         service = HostService(tmp_path / "home", {"account": adapter})
         client, _ = await connected(service)
-        plan = await service.request(client, "agent.login.start", {"agent": "account"})
-        assert plan == {"agent": "account", "transport": "pty", "command": "'/home/user/Agent Host/bin/codex' login --device-auth"}
+        with pytest.raises(AdapterError):
+            await service.request(client, "agent.login.start", {"agent": "account"})
         assert adapter.logout_calls == 0
         result = await service.request(client, "agent.logout", {"agent": "account"})
-        assert result == {"loggedOut": True}
+        assert result["loggedOut"] is True
+        assert result["capability"]["authStatus"] == "loggedOut"
         assert adapter.logout_calls == 1
         service.adapters["fake"] = FakeAdapter()
         with pytest.raises(AdapterError) as error:
-            await service.request(client, "agent.login.start", {"agent": "fake"})
+            await service.request(client, "login.start", {"agent": "fake"})
         assert error.value.code == "E_CAPABILITY"
         await service.close()
     asyncio.run(check())

@@ -22,6 +22,7 @@ export interface AgentCapability {
   handshake?: boolean;
   resourcesAvailable?: boolean;
   sandboxAvailable?: boolean;
+  authStatus?: "missing" | "loggedOut" | "loggedIn" | "failed" | "checking";
 }
 
 export interface Target {
@@ -322,15 +323,11 @@ export type RunSeteffortParams = Record<string, JsonValue>;
 
 export type RunCompactParams = Record<string, JsonValue>;
 
-export interface AgentLoginStartParams {
-  agent: string;
-}
-
 export interface AgentLogoutParams {
   agent: string;
 }
 
-export type ProtocolErrorCode = "E_PROTOCOL_VERSION" | "E_NOT_LOGGED_IN" | "E_AGENT_NOT_INSTALLED" | "E_SESSION_BUSY" | "E_NATIVE_MISSING" | "E_DEVICE_OFFLINE" | "E_TUNNEL_NOT_READY" | "E_CAPABILITY" | "E_ALREADY_RESOLVED" | "E_INVALID_PARAMS" | "E_NOT_FOUND" | "E_CONFLICT" | "E_FRAME_TOO_LARGE" | "E_INTERNAL" | "E_METHOD_NOT_FOUND" | "E_AGENT" | "E_HOST_DRAINING" | "E_AGENT_EXITED" | "E_TIMEOUT" | "E_CLI_VERSION" | "E_SANDBOX" | "E_AGENT_PROBE" | "E_AGENT_EXECUTABLE";
+export type ProtocolErrorCode = "E_PROTOCOL_VERSION" | "E_NOT_LOGGED_IN" | "E_AGENT_NOT_INSTALLED" | "E_SESSION_BUSY" | "E_NATIVE_MISSING" | "E_DEVICE_OFFLINE" | "E_TUNNEL_NOT_READY" | "E_CAPABILITY" | "E_ALREADY_RESOLVED" | "E_INVALID_PARAMS" | "E_NOT_FOUND" | "E_CONFLICT" | "E_FRAME_TOO_LARGE" | "E_INTERNAL" | "E_METHOD_NOT_FOUND" | "E_AGENT" | "E_HOST_DRAINING" | "E_AGENT_EXITED" | "E_TIMEOUT" | "E_CLI_VERSION" | "E_SANDBOX" | "E_AGENT_PROBE" | "E_AGENT_EXECUTABLE" | "E_LOGIN_BUSY" | "E_LOGIN_GONE" | "E_LOGIN_STATE" | "E_LOGIN_INPUT" | "E_LOGIN_PROTOCOL" | "E_LOGIN_FAILED" | "E_LOGIN_VERIFY" | "E_LOGIN_EXPIRED" | "E_LOGIN_CANCELLED" | "E_NATIVE_UNSUPPORTED" | "E_TARGET" | "E_LOGOUT_VERIFY";
 
 export interface ApprovalServerRequest {
   jsonrpc: "2.0";
@@ -343,14 +340,9 @@ export interface ApprovalServerResult {
   decision: ApprovalDecision;
 }
 
-export interface AgentLoginStartResult {
-  agent: string;
-  transport: "pty";
-  command: string;
-}
-
 export interface AgentLogoutResult {
   loggedOut: true;
+  capability?: AgentCapability;
 }
 
 export interface HostPrepareShutdownParams {
@@ -393,4 +385,55 @@ export interface DeviceRegisterResult {
 export interface DeviceTunnelReadyResult {
   state: string;
   generation: string;
+}
+
+export interface LoginStartParams {
+  agent: string;
+}
+
+export interface LoginStartResult {
+  loginId: string;
+  agent: string;
+}
+
+export interface LoginRespondParams {
+  loginId: string;
+  text: string;
+}
+
+export interface LoginCancelParams {
+  loginId: string;
+}
+
+export interface LoginAcceptedResult {
+  accepted: boolean;
+}
+
+export interface LoginPrompt {
+  loginId: string;
+  agent: string;
+  url?: string;
+  deviceCode?: string;
+  needsInput: boolean;
+  rawOutput?: string;
+}
+
+export interface LoginState {
+  loginId: string;
+  agent: string;
+  state: "starting" | "waiting" | "succeeded" | "failed" | "expired" | "cancelled";
+  reason?: string;
+  capability?: AgentCapability;
+}
+
+export interface LoginPromptNotification {
+  jsonrpc: "2.0";
+  method: "login.prompt";
+  params: LoginPrompt;
+}
+
+export interface LoginStateNotification {
+  jsonrpc: "2.0";
+  method: "login.state";
+  params: LoginState;
 }

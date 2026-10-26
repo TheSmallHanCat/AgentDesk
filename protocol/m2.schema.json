@@ -921,18 +921,6 @@
         "$ref": "#/$defs/JsonValue"
       }
     },
-    "AgentLoginStartParams": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "agent": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "agent"
-      ]
-    },
     "AgentLogoutParams": {
       "type": "object",
       "additionalProperties": false,
@@ -970,7 +958,19 @@
         "E_CLI_VERSION",
         "E_SANDBOX",
         "E_AGENT_PROBE",
-        "E_AGENT_EXECUTABLE"
+        "E_AGENT_EXECUTABLE",
+        "E_LOGIN_BUSY",
+        "E_LOGIN_GONE",
+        "E_LOGIN_STATE",
+        "E_LOGIN_INPUT",
+        "E_LOGIN_PROTOCOL",
+        "E_LOGIN_FAILED",
+        "E_LOGIN_VERIFY",
+        "E_LOGIN_EXPIRED",
+        "E_LOGIN_CANCELLED",
+        "E_NATIVE_UNSUPPORTED",
+        "E_TARGET",
+        "E_LOGOUT_VERIFY"
       ]
     },
     "ApprovalServerRequest": {
@@ -1011,27 +1011,6 @@
         "decision"
       ]
     },
-    "AgentLoginStartResult": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "agent": {
-          "type": "string"
-        },
-        "transport": {
-          "type": "string",
-          "const": "pty"
-        },
-        "command": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "agent",
-        "transport",
-        "command"
-      ]
-    },
     "AgentLogoutResult": {
       "type": "object",
       "additionalProperties": false,
@@ -1039,6 +1018,9 @@
         "loggedOut": {
           "type": "boolean",
           "const": true
+        },
+        "capability": {
+          "$ref": "#/$defs/AgentCapability"
         }
       },
       "required": [
@@ -1165,6 +1147,181 @@
       "required": [
         "state",
         "generation"
+      ]
+    },
+    "LoginStartParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "agent": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "agent"
+      ]
+    },
+    "LoginStartResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "loginId": {
+          "type": "string"
+        },
+        "agent": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "loginId",
+        "agent"
+      ]
+    },
+    "LoginRespondParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "loginId": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "loginId",
+        "text"
+      ]
+    },
+    "LoginCancelParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "loginId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "loginId"
+      ]
+    },
+    "LoginAcceptedResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "accepted": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "accepted"
+      ]
+    },
+    "LoginPrompt": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "loginId": {
+          "type": "string"
+        },
+        "agent": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        },
+        "deviceCode": {
+          "type": "string"
+        },
+        "needsInput": {
+          "type": "boolean"
+        },
+        "rawOutput": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "loginId",
+        "agent",
+        "needsInput"
+      ]
+    },
+    "LoginState": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "loginId": {
+          "type": "string"
+        },
+        "agent": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "starting",
+            "waiting",
+            "succeeded",
+            "failed",
+            "expired",
+            "cancelled"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "capability": {
+          "$ref": "#/$defs/AgentCapability"
+        }
+      },
+      "required": [
+        "loginId",
+        "agent",
+        "state"
+      ]
+    },
+    "LoginPromptNotification": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "jsonrpc": {
+          "type": "string",
+          "const": "2.0"
+        },
+        "method": {
+          "type": "string",
+          "const": "login.prompt"
+        },
+        "params": {
+          "$ref": "#/$defs/LoginPrompt"
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "method",
+        "params"
+      ]
+    },
+    "LoginStateNotification": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "jsonrpc": {
+          "type": "string",
+          "const": "2.0"
+        },
+        "method": {
+          "type": "string",
+          "const": "login.state"
+        },
+        "params": {
+          "$ref": "#/$defs/LoginState"
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "method",
+        "params"
       ]
     }
   },
@@ -1395,14 +1552,6 @@
       },
       "x-availability": "unsupported"
     },
-    "agent.login.start": {
-      "params": {
-        "$ref": "#/$defs/AgentLoginStartParams"
-      },
-      "result": {
-        "$ref": "#/$defs/AgentLoginStartResult"
-      }
-    },
     "agent.logout": {
       "params": {
         "$ref": "#/$defs/AgentLogoutParams"
@@ -1485,6 +1634,30 @@
           "command"
         ]
       }
+    },
+    "login.start": {
+      "params": {
+        "$ref": "#/$defs/LoginStartParams"
+      },
+      "result": {
+        "$ref": "#/$defs/LoginStartResult"
+      }
+    },
+    "login.respond": {
+      "params": {
+        "$ref": "#/$defs/LoginRespondParams"
+      },
+      "result": {
+        "$ref": "#/$defs/LoginAcceptedResult"
+      }
+    },
+    "login.cancel": {
+      "params": {
+        "$ref": "#/$defs/LoginCancelParams"
+      },
+      "result": {
+        "$ref": "#/$defs/LoginAcceptedResult"
+      }
     }
   },
   "oneOf": [
@@ -1496,6 +1669,12 @@
     },
     {
       "$ref": "#/$defs/EventNotification"
+    },
+    {
+      "$ref": "#/$defs/LoginPromptNotification"
+    },
+    {
+      "$ref": "#/$defs/LoginStateNotification"
     }
   ],
   "x-server-methods": {
@@ -1506,6 +1685,20 @@
       "result": {
         "$ref": "#/$defs/ApprovalServerResult"
       }
+    }
+  },
+  "x-notifications": {
+    "login.prompt": {
+      "params": {
+        "$ref": "#/$defs/LoginPrompt"
+      },
+      "x-persistence": "never"
+    },
+    "login.state": {
+      "params": {
+        "$ref": "#/$defs/LoginState"
+      },
+      "x-persistence": "never"
     }
   }
 }
