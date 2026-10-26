@@ -62,6 +62,7 @@ pub struct HostClient {
     next: AtomicU64,
     pub cancel: CancellationToken,
     pub events: broadcast::Sender<Value>,
+    pub login_events: broadcast::Sender<Value>,
     pub hello: Mutex<Value>,
 }
 impl HostClient {
@@ -75,12 +76,14 @@ impl HostClient {
         let stream = ssh.open_streamlocal(target, &socket).await?.into_stream();
         let (reader, writer) = tokio::io::split(stream);
         let (events, _) = broadcast::channel(512);
+        let (login_events, _) = broadcast::channel(64);
         let client = Arc::new(Self {
             writer: AsyncMutex::new(Some(Box::new(writer))),
             pending: Mutex::default(),
             next: AtomicU64::new(1),
             cancel: CancellationToken::new(),
             events,
+            login_events,
             hello: Mutex::new(Value::Null),
         });
         let weak = Arc::downgrade(&client);
@@ -98,9 +101,7 @@ impl HostClient {
                 };
                 let Some(client) = weak.upgrade() else { break };
                 if let Some(method) = message.get("method").and_then(Value::as_str) {
-                    if method == "event" || method == "approval.request" {
-                        let _ = client.events.send(message["params"].clone());
-                    } else if message.get("id").is_some() {
+                    if !client.notify(method, &message["params"]) && message.get("id").is_some() {
                         // Host approvals are persisted events answered through
                         // approval.respond. Unknown server requests fail closed.
                         let _ = client.write(&json!({"jsonrpc":"2.0","id":message["id"],"error":{"code":-32601,"message":"Use approval.respond"}})).await;
@@ -156,6 +157,20 @@ impl HostClient {
             .lock()
             .map_err(|e| AppError::io("host.hello", e))? = hello;
         Ok(client)
+    }
+    fn notify(&self, method: &str, params: &Value) -> bool {
+        match method {
+            "event" | "approval.request" => {
+                let _ = self.events.send(params.clone());
+            }
+            "login.prompt" | "login.state" => {
+                let _ = self
+                    .login_events
+                    .send(json!({"method":method,"data":params}));
+            }
+            _ => return false,
+        }
+        true
     }
     async fn write(&self, message: &Value) -> AppResult<()> {
         let mut data = serde_json::to_vec(message).map_err(|e| AppError::io("host.frame", e))?;
@@ -262,6 +277,7 @@ pub struct HostPool {
     clients: AsyncMutex<HashMap<String, Arc<HostClient>>>,
     connect_locks: Mutex<HashMap<String, Arc<AsyncMutex<()>>>>,
     pub subscriptions: Mutex<HashMap<String, (Target, CancellationToken)>>,
+    pub logins: Mutex<HashMap<String, (Target, std::sync::Weak<HostClient>)>>,
     device_id: String,
 }
 impl HostPool {
@@ -270,6 +286,7 @@ impl HostPool {
             clients: AsyncMutex::default(),
             connect_locks: Mutex::default(),
             subscriptions: Mutex::default(),
+            logins: Mutex::default(),
             device_id,
         }
     }
@@ -317,6 +334,9 @@ impl HostPool {
     pub async fn disconnect(&self, connection_id: &str) {
         if let Some(client) = self.clients.lock().await.remove(connection_id) {
             client.cancel.cancel();
+        }
+        if let Ok(mut entries) = self.logins.lock() {
+            entries.retain(|_, (target, _)| target.connection_id != connection_id);
         }
         if let Ok(mut entries) = self.subscriptions.lock() {
             entries.retain(|_, (target, token)| {
@@ -388,6 +408,7 @@ mod tests {
     async fn partial_write_failure_invalidates_transport_without_resending() {
         let written = Arc::new(Mutex::new(Vec::new()));
         let (events, _) = broadcast::channel(1);
+        let (login_events, _) = broadcast::channel(1);
         let client = HostClient {
             writer: AsyncMutex::new(Some(Box::new(PartialFailure {
                 written: written.clone(),
@@ -396,6 +417,7 @@ mod tests {
             next: AtomicU64::new(1),
             cancel: CancellationToken::new(),
             events,
+            login_events,
             hello: Mutex::new(Value::Null),
         };
         assert_eq!(
@@ -416,6 +438,43 @@ mod tests {
             "E_DISCONNECTED"
         );
         assert_eq!(written.lock().unwrap().len(), 3);
+    }
+    #[tokio::test]
+    async fn login_notifications_are_live_only_and_do_not_reach_diagnostics_or_sqlite() {
+        let directory = tempfile::tempdir().unwrap();
+        let db = Db::open(&directory.path().join("desktop.sqlite")).unwrap();
+        let diagnostics = crate::session_log::Diagnostics::new(directory.path());
+        let (events, mut session_events) = broadcast::channel(1);
+        let (login_events, mut logins) = broadcast::channel(1);
+        let client = HostClient {
+            writer: AsyncMutex::new(Some(Box::new(tokio::io::sink()))),
+            pending: Mutex::default(),
+            next: AtomicU64::new(1),
+            cancel: CancellationToken::new(),
+            events,
+            login_events,
+            hello: Mutex::new(Value::Null),
+        };
+        let url = "https://example.invalid/login?state=SECRET-LOGIN-LINK";
+        let code = "SECRET-USER-CODE";
+        let prompt = json!({"loginId":"login1","agent":"claude","url":url,"deviceCode":code,"needsInput":true});
+        assert!(client.notify("login.prompt", &prompt));
+        assert_eq!(logins.recv().await.unwrap()["data"], prompt);
+        assert!(session_events.try_recv().is_err());
+        assert!(client.login_events.subscribe().try_recv().is_err());
+        diagnostics.record("connection", "login.cancel", 1, None);
+        diagnostics
+            .export(&directory.path().join("export.json"))
+            .unwrap();
+        drop(db);
+        for entry in std::fs::read_dir(directory.path()).unwrap() {
+            let bytes = std::fs::read(entry.unwrap().path()).unwrap();
+            for secret in [url, code] {
+                assert!(!bytes
+                    .windows(secret.len())
+                    .any(|window| window == secret.as_bytes()));
+            }
+        }
     }
     #[tokio::test]
     async fn frame_limits_and_partial_eof() {

@@ -2,6 +2,7 @@ pub mod conn;
 pub mod device;
 pub mod env;
 pub mod file;
+pub mod login;
 pub mod project;
 pub mod session;
 pub mod sys;

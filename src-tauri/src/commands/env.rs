@@ -166,7 +166,13 @@ pub async fn env_probe(
                 for (agent, caps) in probe["agents"].as_object().into_iter().flatten() {
                     let prefix = agent;
                     additional.push(json!({"name":format!("{prefix}Cli"),"status":if caps["installed"]==true {"ready"} else {"missing"},"detail":caps["version"].as_str().unwrap_or("unknown")}));
-                    additional.push(json!({"name":format!("{prefix}Login"),"status":if caps["loggedIn"]==true {"ready"} else {"missing"},"detail":caps["reason"].as_str().unwrap_or("ready")}));
+                    let login_status = match caps["authStatus"].as_str() {
+                        Some("failed") => "failed",
+                        Some("checking") => "unknown",
+                        _ if caps["loggedIn"] == true => "ready",
+                        _ => "missing",
+                    };
+                    additional.push(json!({"name":format!("{prefix}Login"),"status":login_status,"detail":caps["reason"].as_str().unwrap_or("ready")}));
                 }
                 let caps = &probe["agents"]["codex"];
                 for (name, field) in [
@@ -413,42 +419,6 @@ pub async fn host_rollback(
             Err(recovery)=>Err(error.with_details(json!({"recoveryCode":recovery.code,"recoveryStage":recovery.stage,"hint":"Rollback recovery failed; inspect the retained versions"}))),
         }
     }
-}
-#[tauri::command]
-pub async fn agent_login_start(
-    state: tauri::State<'_, AppState>,
-    target: Target,
-    agent: String,
-    cols: Option<u32>,
-    rows: Option<u32>,
-    on_output: tauri::ipc::Channel<crate::ssh::pty::TerminalFrame>,
-) -> AppResult<Reply<Value>> {
-    let client = state.hosts.client(&state.ssh, &state.db, &target).await?;
-    let plan = client
-        .request("agent.login.start", json!({"agent":agent}))
-        .await?;
-    let command = plan["command"]
-        .as_str()
-        .ok_or_else(|| AppError::new("E_PROTOCOL", "agent.login", "Login command missing"))?;
-    let home = remote_home(&state.ssh, &target).await?;
-    let terminal = state
-        .terminals
-        .open_script(
-            &state.ssh,
-            target.clone(),
-            format!(
-                "cd {} || exit 1
-stty echo || exit 1
-exec {command}
-",
-                crate::ssh::sftp::quote(&home)
-            ),
-            cols.unwrap_or(100),
-            rows.unwrap_or(30),
-            on_output,
-        )
-        .await?;
-    Ok(target.reply(json!({"terminalId":terminal})))
 }
 #[cfg(test)]
 mod tests {
