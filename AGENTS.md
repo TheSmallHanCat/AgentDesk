@@ -10,3 +10,5 @@
 - 检查命令见 README：`pnpm test/typecheck/build`、Rust `fmt/test/clippy/build`、Host `pytest`、`pnpm protocol:check`。
 - 可以对独立且有收益的模块使用当前环境支持的子 agent；不要写死模型。若子任务工具不可用，主 agent 继续处理并如实报告，不把未执行的检查写成通过。
 - 提交前统一检查 diff 与验证结果。使用 Conventional Commits 和中文描述，小步形成可运行里程碑。
+
+- M3 本机项目由 Rust 根据持久归属分派文件与终端；反向执行通道必须先探测成功、再按项目授权，断开后授权失效。真实会话使用归档语义；Codex 本机模式仅使用 A-02 第 1 档。

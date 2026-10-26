@@ -18,5 +18,10 @@
 
 11. 本轮已明确授权 root 调整 user namespace 和公钥认证，替代第 4、10 项中对本轮操作的限制。sysctl 从 0 调为 15000 后最小沙箱与第一档 Unix socket 访问通过；0.164.0 的 `sandbox` 命令不再有 `linux` 子命令。未修改 grub、未重启、未开启 Windows agent 服务。备份及回滚见任务 03 报告。
 12. M1 桌面项目保留并以原 id 幂等登记到 Host；不删除、不自动合并不同连接的相同目录。Host 会话归属存于桌面独立映射表，hostId 提示同机，但不同连接依然隔离。完整多设备项目索引自动合并需要独立确认迁移规则。
-13. 当前官方 Claude SDK 0.2.174 没有原生会话删除 API，Codex 的 thread/archive 也不等价于删除。按设计“先删除原生记录再删镜像”采用保守处理：有原生记录的真实 Agent 删除返回 E_CAPABILITY，保留镜像；Fake 删除可完整执行。需要架构师确认是否以归档作为产品删除语义，或批准针对版本明确的原生文件删除实现。不能直接删 UI 历史后声称原生会话已删除。
+13. **已决（A-01，任务 04）**：真实 Agent 的“删除”采用归档语义，从普通列表隐藏，在“已归档”中查看和恢复；明确告知不会删除 Agent 的原生会话记录。只有 FakeAdapter 或官方元数据接口确认原生记录不存在时才允许彻底删除镜像。以后接入官方真正删除接口时另行实现。
 14. 登录入口由桌面 PTY 直接运行官方命令；Host `agent.login.start` 仅返回 PTY 命令计划，`agent.logout` 仅显式调用时运行官方退出命令。本轮未执行登录或退出账号；不把令牌或完整认证响应跨 Host 协议传回桌面。用户登录后单独组织真实模型验收。
+
+## 任务 04 更新
+
+15. **已决（A-02）**：Codex 本机模式固定使用 workspace-write，开启 network_access，writable_roots 包含设备入口目录；不使用 danger-full-access。ProxyCommand 使用 Host 的 Python Unix socket 转接。
+16. 测试服务器的 OpenSSH 7.4 不支持 RemoteCommand，低于本机执行模式的依赖要求。验收在专用用户目录构建新版官方客户端，仅影响 Host 进程 PATH；不替换系统客户端、不修改 sshd 或登录 shell，不扩大既定产品支持基线。

@@ -42,3 +42,9 @@ agentdesk_claude="$("$agentdesk_python" -c 'import pathlib,claude_agent_sdk; pri
 待验收：两种 Agent 的新建、模型可用性、流式文本、工具与文件事件、审批允许/拒绝、多设备竞争、AskUserQuestion、停止、断线补取、原生恢复、原生记录缺失错误。Codex 还需在真实模型流程中复核权限实际生效。自动契约入口：在服务器的隔离测试目录显式设置 `AGENTDESK_NATIVE_CONTRACT=1` 后执行 Host pytest；该步骤会发送模型请求，应在架构师组织验收时执行。
 
 测试服务器低于 glibc 2.28 的产品支持基线；本轮实测可运行不代表扩大支持范围。系统升级或 CLI 版本变化后需要重新检测。
+
+## M3 登录后验收
+
+本轮仍不尝试登录或读取账号凭据。用户本人完成官方登录后，按 `progress/04-fix-M3.md` 的两种 Agent × 远端/本机四组清单验收。Windows 本机模式需先准备随包组件、确认服务器支持 RemoteCommand，并在项目中授权执行通道；控制连接成功不代表执行端已就绪。Codex 本机模式固定使用 workspace-write、network_access=true 和设备入口 writable_roots，不放宽为 danger-full-access。
+
+真实会话“删除”采用归档，原生记录保留；可在已归档列表恢复。
