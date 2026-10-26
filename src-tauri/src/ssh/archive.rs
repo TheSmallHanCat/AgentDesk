@@ -12,6 +12,21 @@ use tokio_util::sync::CancellationToken;
 const STREAM: &str = include_str!("archive_stream.sh");
 const CLEANUP: &str = include_str!("archive_cleanup.sh");
 
+fn launch_script(marker: &str, parent: &str, base: &str) -> String {
+    // Noninteractive shells redirect an unqualified background job's stdin to
+    // /dev/null. Preserve SSH stdin explicitly for the authorization gate. Parse
+    // the whole block before launching, so the outer parser cannot consume GO.
+    // With job control disabled the background PID differs from its inherited
+    // PGID, allowing legacy setsid to exec without forking; wait retains status.
+    format!(
+        "{{\n  set +m\n  exec 3<&0\n  setsid /bin/sh -c {} {} {} {} <&3 3<&- &\n  archive_pid=$!\n  exec 3<&-\n  archive_status=0\n  wait \"$archive_pid\" || archive_status=$?\n  exit \"$archive_status\"\n}}\n",
+        sftp::quote(STREAM),
+        sftp::quote(marker),
+        sftp::quote(parent),
+        sftp::quote(base)
+    )
+}
+
 pub(super) async fn copy(
     ssh: &SshManager,
     target: &Target,
@@ -25,13 +40,7 @@ pub(super) async fn copy(
         .ok_or_else(|| AppError::new("E_PATH", "archive", "Archive path must be absolute"))?;
     let parent = if parent.is_empty() { "/" } else { parent };
     let marker = format!("agentdesk-archive-{}", uuid::Uuid::new_v4());
-    let script = format!(
-        "exec setsid -w /bin/sh -c {} {} {} {}\n",
-        sftp::quote(STREAM),
-        sftp::quote(&marker),
-        sftp::quote(parent),
-        sftp::quote(base)
-    );
+    let script = launch_script(&marker, parent, base);
     let mut channel = ssh.open_channel(target).await?;
     let result = async {
         channel
@@ -168,6 +177,114 @@ mod tests {
     use std::sync::Arc;
 
     const MARKER: &str = "agentdesk-archive-regression";
+
+    fn shell_program() -> std::path::PathBuf {
+        if !cfg!(windows) {
+            return "sh".into();
+        }
+        let output = std::process::Command::new("git")
+            .arg("--exec-path")
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let git_path = std::path::PathBuf::from(String::from_utf8(output.stdout).unwrap().trim());
+        git_path
+            .ancestors()
+            .flat_map(|path| [path.join("bin/sh.exe"), path.join("usr/bin/sh.exe")])
+            .find(|path| path.is_file())
+            .expect("Windows archive regression requires Git Bash")
+    }
+
+    fn shell_path(path: &std::path::Path) -> String {
+        let path = path.to_string_lossy().replace('\\', "/");
+        if cfg!(windows) && path.as_bytes().get(1) == Some(&b':') {
+            format!("/{}{}", path[..1].to_ascii_lowercase(), &path[2..])
+        } else {
+            path
+        }
+    }
+
+    async fn actual_archive(authorize: bool, exists: bool) -> std::process::Output {
+        use std::process::Stdio;
+        use tokio::io::{AsyncBufReadExt, BufReader};
+        let directory = tempfile::tempdir().unwrap();
+        let bin = directory.path().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        let shim = bin.join("setsid");
+        // Model the legacy CentOS setsid interface while delegating actual
+        // process/session creation to the installed executable.
+        std::fs::write(&shim, "#!/bin/sh\ncase \"$1\" in -*) printf 'unsupported setsid option\\n' >&2; exit 64;; esac\nexec \"$REAL_SETSID\" \"$@\"\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        std::fs::write(directory.path().join("payload"), "archive regression").unwrap();
+        let script = format!("REAL_SETSID=$(command -v setsid)\nexport REAL_SETSID\nPATH={}:\"$PATH\"\nexport PATH\n{}",
+            sftp::quote(&shell_path(&bin)), launch_script(MARKER, &shell_path(directory.path()), if exists { "payload" } else { "missing" }));
+        let mut child = tokio::process::Command::new(shell_program())
+            .arg("-s")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let mut input = child.stdin.take().unwrap();
+        let mut errors = BufReader::new(child.stderr.take().unwrap());
+        input.write_all(script.as_bytes()).await.unwrap();
+        let mut ready = String::new();
+        tokio::time::timeout(Duration::from_secs(10), errors.read_line(&mut ready))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(ready, format!("AGENTDESK_ARCHIVE_READY:{MARKER}\n"));
+        if authorize {
+            input
+                .write_all(format!("{MARKER}\n").as_bytes())
+                .await
+                .unwrap();
+        }
+        drop(input);
+        tokio::time::timeout(Duration::from_secs(10), child.wait_with_output())
+            .await
+            .unwrap()
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn legacy_setsid_without_wait_option_streams_and_propagates_exit_status() {
+        use std::process::Stdio;
+        let output = actual_archive(true, true).await;
+        assert!(output.status.success());
+        assert!(output.stdout.starts_with(&[0x1f, 0x8b]));
+        let mut extract = tokio::process::Command::new(shell_program())
+            .args(["-c", "tar -xOzf -"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let mut input = extract.stdin.take().unwrap();
+        input.write_all(&output.stdout).await.unwrap();
+        drop(input);
+        let extracted = tokio::time::timeout(Duration::from_secs(10), extract.wait_with_output())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(extracted.status.success());
+        assert_eq!(extracted.stdout, b"archive regression");
+        let failed = actual_archive(true, false).await;
+        assert_eq!(failed.status.code(), Some(2));
+    }
+
+    #[tokio::test]
+    async fn legacy_setsid_cancellation_before_authorization_never_starts_tar() {
+        let output = actual_archive(false, true).await;
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+    }
 
     struct TestClient;
     impl client::Handler for TestClient {
