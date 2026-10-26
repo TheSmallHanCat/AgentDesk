@@ -1,0 +1,24 @@
+AgentDesk
+Copyright (C) 2026 AgentDesk contributors
+SPDX-License-Identifier: AGPL-3.0-only
+
+本项目以 GNU Affero General Public License v3.0 only 发布，完整文本见 LICENSE。
+
+外壳布局、语义主题、设置与数据目录模式参考 Pymss Studio
+（本地参考项目，AGPL-3.0；作者 TheSmallHanCat）。本项目未引入其音频业务、
+Python Worker、插件市场、Logo、字体文件、模型或其他素材。
+RemoteShell 和 CC Desk Tunnel 只用于理解行为，未整段复制业务实现。
+
+主要第三方组件（各自的版权归属原作者，许可证以锁定版本随包文件为准）：
+- Vue / Pinia / Vue Router / vue-i18n / Vite / Naive UI / Sass: MIT
+- TypeScript / CodeMirror: Apache-2.0 / MIT
+- xterm.js 及 addons: MIT
+- Tauri、Tauri 官方插件、keyring、rusqlite、serde、Tokio、directories、tempfile: MIT 或 Apache-2.0（按组件）
+- russh、russh-sftp: Apache-2.0
+- Ionicons / @vicons/ionicons5: MIT
+- pytest: MIT；jsonschema: MIT；happy-dom: MIT
+- Python 包构建工具 hatchling / uv: MIT（uv 为 MIT 或 Apache-2.0）
+
+完整依赖版本见 pnpm-lock.yaml、src-tauri/Cargo.lock、host/uv.lock。
+分发安装包前仍需按最终打包产物生成完整的传递依赖版权清单与许可证文本。
+本文件列出主要组件，不宣称替代完整的二进制分发许可清单。

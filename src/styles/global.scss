@@ -1,0 +1,31 @@
+* { box-sizing: border-box; }
+body { margin: 0; font-family: MiSans, 'Segoe UI', 'Microsoft YaHei UI', sans-serif; font-size: 14px; background: var(--surface, #f4f6fa); color: var(--text, #172033); }
+html, body, #app { height: 100%; overflow: hidden; }
+button, input, textarea { font: inherit; }
+button { cursor: pointer; } button:disabled { cursor: default; }
+a { color: var(--primary); text-decoration: none; }
+button:focus-visible, a:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.app-shell { height: 100dvh; display: grid; grid-template-rows: 40px minmax(0, 1fr); grid-template-columns: 64px minmax(0, 1fr); }
+.title-bar { grid-column: 1 / -1; display: flex; align-items: center; background: var(--surface1); border-bottom: 1px solid var(--border); user-select: none; }
+.brand { display: flex; align-items: center; gap: 12px; padding-left: 19px; height: 100%; font-size: 12px; }
+.brand-mark { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 6px; color: white; background: var(--primary); font-size: 14px; }
+.title-drag { flex: 1; height: 100%; } .window-actions { display: flex; height: 100%; }
+.window-actions button { border: 0; width: 46px; color: var(--text); background: transparent; font-size: 19px; } .window-actions button:hover { background: var(--surface2); } .window-actions .close:hover { background: #c42b3b; color: white; }
+.side-nav { display: flex; flex-direction: column; align-items: stretch; gap: 5px; padding: 12px 6px; border-right: 1px solid var(--border); background: var(--surface1); }
+.side-nav a { min-height: 58px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; border-radius: 8px; color: var(--muted); border: 1px solid transparent; font-size: 10px; }
+.side-nav svg { width: 21px; height: 21px; } .side-nav a:hover { background: var(--surface2); } .side-nav .router-link-active { color: var(--primary); background: var(--surface2); border-color: var(--border); } .side-nav .bottom { margin-top: auto; }
+.main-area { min-height: 0; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
+.route-area { flex: 1; min-height: 0; overflow: auto; }
+.page { padding: 26px 32px 34px; max-width: 1600px; margin: 0 auto; }
+.page-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; margin-bottom: 26px; } h1 { font-size: 25px; line-height: 1.3; letter-spacing: -.6px; margin: 0 0 8px; font-weight: 650; } h2 { font-size: 17px; margin: 0 0 16px; } p { line-height: 1.6; margin: 8px 0; } .muted { color: var(--muted); } .mono { font-family: Consolas, 'Cascadia Code', monospace; overflow-wrap: anywhere; }
+.actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; } .stack { display: flex; flex-direction: column; gap: 16px; }
+.panel { border: 1px solid var(--border); background: var(--surface1); border-radius: 10px; padding: 20px; }
+.empty { min-height: 260px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; color: var(--muted); padding: 32px; gap: 8px; } .empty svg { width: 44px; height: 44px; opacity: .5; margin-bottom: 10px; } .empty h2 { color: var(--text); margin: 0; }
+.record { display: flex; gap: 20px; align-items: center; padding: 18px 20px; border: 1px solid var(--border); background: var(--surface1); border-radius: 9px; } .record-copy { flex: 1; min-width: 0; } .record-copy strong { font-size: 16px; } .record-copy p { margin: 5px 0 0; font-size: 12px; } .record-icon { width: 22px; height: 22px; color: var(--primary); }
+.status { font-size: 12px; white-space: nowrap; color: var(--muted); } .status.connected { color: #27815c; } .status.failed { color: #c04e60; }
+.field-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; } .wide { grid-column: 1 / -1; } .n-modal .n-card { max-width: calc(100vw - 40px); max-height: calc(100vh - 60px); overflow: auto; }
+.toast { position: fixed; right: 24px; top: 56px; z-index: 5000; max-width: 480px; }
+.setting-row { display: grid; grid-template-columns: minmax(180px, 1fr) 260px; align-items: center; gap: 28px; padding: 18px 0; border-bottom: 1px solid var(--border); } .setting-row:last-child { border: 0; } .setting-row p { color: var(--muted); font-size: 12px; margin: 4px 0 0; }
+.error-detail { white-space: pre-wrap; overflow-wrap: anywhere; color: #bf5866; font-size: 12px; }
+@media (max-width: 1179px) { .page { padding: 20px 24px 28px; } .record { gap: 12px; } }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; } }

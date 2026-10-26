@@ -1,0 +1,14 @@
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/
+.agentdesk-data/
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+*.log
+.env
+.env.*
+!.env.example
+test-results/

@@ -1,0 +1,18 @@
+[build-system]
+requires = ["hatchling>=1.26,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "agentdesk-host"
+version = "0.1.0"
+description = "AgentDesk 远端运行代理包骨架"
+requires-python = ">=3.12"
+license = "AGPL-3.0-only"
+dependencies = []
+
+[dependency-groups]
+dev = ["pytest>=8.3,<10", "jsonschema>=4.23,<5"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

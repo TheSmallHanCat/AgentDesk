@@ -1,0 +1,185 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentdesk.dev/protocol/1.0/hello.schema.json",
+  "title": "AgentDesk hello handshake",
+  "description": "协议 1.0 的握手样例；此阶段不实现远端 RPC 服务。",
+  "$defs": {
+    "ResumeCursor": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "lastSeq": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "lastSeq"
+      ]
+    },
+    "AgentCapability": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "available": {
+          "type": "boolean"
+        },
+        "streaming": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "available",
+        "streaming"
+      ]
+    },
+    "Target": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "connectionId": {
+          "type": "string"
+        },
+        "projectId": {
+          "type": "string"
+        },
+        "sessionId": {
+          "type": "string"
+        },
+        "requestSeq": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "connectionId",
+        "requestSeq"
+      ]
+    },
+    "HelloParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "protocolVersion": {
+          "type": "string",
+          "const": "1.0"
+        },
+        "client": {
+          "type": "string"
+        },
+        "deviceId": {
+          "type": "string"
+        },
+        "deviceName": {
+          "type": "string"
+        },
+        "os": {
+          "type": "string",
+          "enum": [
+            "windows",
+            "macos",
+            "linux"
+          ]
+        },
+        "resume": {
+          "$ref": "#/$defs/ResumeCursor"
+        }
+      },
+      "required": [
+        "protocolVersion",
+        "client",
+        "deviceId",
+        "deviceName",
+        "os"
+      ]
+    },
+    "HelloResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "protocolVersion": {
+          "type": "string",
+          "const": "1.0"
+        },
+        "host": {
+          "type": "string"
+        },
+        "hostId": {
+          "type": "string"
+        },
+        "capabilities": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/AgentCapability"
+          }
+        },
+        "currentSeq": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "protocolVersion",
+        "host",
+        "hostId",
+        "capabilities",
+        "currentSeq"
+      ]
+    },
+    "HelloRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "jsonrpc": {
+          "type": "string",
+          "const": "2.0"
+        },
+        "id": {
+          "type": "integer"
+        },
+        "method": {
+          "type": "string",
+          "const": "hello"
+        },
+        "params": {
+          "$ref": "#/$defs/HelloParams"
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "id",
+        "method",
+        "params"
+      ]
+    },
+    "HelloResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "jsonrpc": {
+          "type": "string",
+          "const": "2.0"
+        },
+        "id": {
+          "type": "integer"
+        },
+        "result": {
+          "$ref": "#/$defs/HelloResult"
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "id",
+        "result"
+      ]
+    }
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/HelloRequest"
+    },
+    {
+      "$ref": "#/$defs/HelloResponse"
+    }
+  ]
+}

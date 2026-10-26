@@ -1,0 +1,37 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "hello",
+    "params": {
+      "protocolVersion": "1.0",
+      "client": "agentdesk-desktop/0.1.0",
+      "deviceId": "dev_example",
+      "deviceName": "Development device",
+      "os": "windows",
+      "resume": {
+        "lastSeq": 0
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "protocolVersion": "1.0",
+      "host": "0.1.0",
+      "hostId": "host_example",
+      "capabilities": {
+        "claude": {
+          "available": false,
+          "streaming": false
+        },
+        "codex": {
+          "available": false,
+          "streaming": false
+        }
+      },
+      "currentSeq": 0
+    }
+  }
+]
