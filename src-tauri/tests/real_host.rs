@@ -262,6 +262,22 @@ async fn real_host_deploy_stream_approval_stop_reconnect() {
             .await,
     );
     let history = history["events"].as_array().unwrap();
+    let replayed: Vec<u64> = recovered["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|event| event["seq"].as_u64().unwrap())
+        .collect();
+    let watermark = recovered["currentSeq"].as_u64().unwrap();
+    let expected: Vec<u64> = history
+        .iter()
+        .map(|event| event["seq"].as_u64().unwrap())
+        .filter(|seq| *seq > last_seq && *seq <= watermark)
+        .collect();
+    assert_eq!(
+        replayed, expected,
+        "Reconnect replay must include every durable event in its cursor interval"
+    );
     let user_messages = history
         .iter()
         .filter(|event| event["type"] == "user.message")
