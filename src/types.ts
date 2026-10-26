@@ -1,4 +1,5 @@
 export interface Target {
+  deviceLocal?: boolean
   connectionId: string
   projectId?: string
   sessionId?: string
@@ -36,6 +37,7 @@ export interface ConnectionStatus {
   error?: string
 }
 export interface Project {
+  deviceLocal?: boolean
   id: string
   connectionId: string
   name: string
@@ -94,6 +96,7 @@ export interface Diagnostic {
   timestamp: number
 }
 export interface Settings {
+  localShell: string
   theme: 'system' | 'light' | 'dark'
   language: 'zh-CN' | 'en'
   closeAction: 'ask' | 'tray' | 'exit'

@@ -193,3 +193,54 @@ test('temporary disconnection keeps its subscription while an explicit release p
   assert.equal(store.state(project, 's').runId, 'new')
   assert.equal(store.state(project, 's').error, '')
 })
+
+test('switching sessions releases the previous server subscription and rejects its late channel', async () => {
+  setActivePinia(createPinia())
+  const store = useChatStore()
+  cleanup = () => store.$dispose()
+  store.sessions[projectKey(project)] = [session, { ...session, id: 'other' }]
+  store.state(project, 's').loaded = true
+  store.state(project, 'other').loaded = true
+  const calls: { command: string; args: any }[] = []
+  window.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+    calls.push({ command, args })
+    return {
+      target: args.target,
+      data:
+        command === 'session_subscribe' ? { subscriptionId: 'sub-' + args.target.sessionId } : '',
+    }
+  }
+  await store.select(project, 's')
+  await store.select(project, 'other')
+  assert.equal(store.state(project, 's').subscriptionId, undefined)
+  assert.equal(store.state(project, 'other').subscriptionId, 'sub-other')
+  assert.equal(calls.filter((c) => c.command === 'session_unsubscribe').length, 1)
+  assert.equal(calls.find((c) => c.command === 'session_unsubscribe')?.args.target.sessionId, 's')
+})
+
+test('a delayed unsubscribe cannot replace a newer session selection', async () => {
+  setActivePinia(createPinia())
+  const store = useChatStore()
+  cleanup = () => store.$dispose()
+  for (const id of ['s', 'b', 'c']) store.state(project, id).loaded = true
+  let resolveRelease: () => void = () => {}
+  window.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+    if (command === 'session_unsubscribe')
+      await new Promise<void>((resolve) => {
+        resolveRelease = resolve
+      })
+    return {
+      target: args.target,
+      data:
+        command === 'session_subscribe' ? { subscriptionId: 'sub-' + args.target.sessionId } : '',
+    }
+  }
+  await store.select(project, 's')
+  const middle = store.select(project, 'b')
+  await store.select(project, 'c')
+  resolveRelease()
+  await middle
+  assert.equal(store.active[projectKey(project)], 'c')
+  assert.equal(store.state(project, 'b').subscriptionId, undefined)
+  assert.equal(store.state(project, 'c').subscriptionId, 'sub-c')
+})

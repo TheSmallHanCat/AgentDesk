@@ -3,6 +3,7 @@ import { computed, ref, watch, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useVirtualizer } from '@tanstack/vue-virtual'
 import { useChatStore } from '../stores/chat'
+import { useDeviceStore } from '../stores/device'
 import { useDataStore } from '../stores/data'
 import { groupItems, isRunning, type ChatItem } from '../utils/chat'
 import { call, errorText } from '../utils/api'
@@ -16,7 +17,24 @@ const emit = defineEmits<{ create: [] }>()
 const { t } = useI18n()
 const chat = useChatStore()
 const data = useDataStore()
+const device = useDeviceStore()
+const canSend = computed(
+  () =>
+    !chat.selected(props.project)?.archived &&
+    (!props.project.deviceLocal ||
+      (device.state(props.project).enabled && device.state(props.project).state === 'ready')),
+)
+watch(
+  () => props.project,
+  (p) => {
+    if (p.deviceLocal) void device.refresh(p)
+  },
+  { immediate: true },
+)
 const session = computed(() => chat.selected(props.project))
+const policy = computed(
+  () => session.value?.executionPolicy as { sandbox?: string; networkAccess?: boolean } | undefined,
+)
 const current = computed(() =>
   session.value ? chat.state(props.project, session.value.id) : undefined,
 )
@@ -77,7 +95,7 @@ async function older() {
 function keyboard(event: KeyboardEvent) {
   if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
     event.preventDefault()
-    if (session.value && current.value && !isRunning(current.value.state))
+    if (session.value && current.value && !isRunning(current.value.state) && canSend.value)
       void chat.send(props.project, session.value.id)
   }
 }
@@ -93,21 +111,26 @@ async function blob(item: ChatItem) {
     let offset = 0,
       content = ''
     do {
-      const owner = { ...target(project.connectionId, project.id), sessionId: sid }
+      const owner = {
+        ...target(project.connectionId, project.id, project.deviceLocal),
+        sessionId: sid,
+      }
       const result = unwrap(
         owner,
         await call<Reply<BlobResult>>('event_blob', {
           target: owner,
-          seq: item.lastSeq,
+          seq: item.blobSeq ?? item.lastSeq,
           offset,
           limit: 131072,
         }),
       )
-      if (result.total > 8 * 1024 * 1024) throw new Error(t('chat.outputTooLarge'))
+      if (item.type !== 'approval.request' && result.total > 8 * 1024 * 1024)
+        throw new Error(t('chat.outputTooLarge'))
       content += result.text
       offset = result.nextOffset
       if (!result.hasMore) break
     } while (true)
+    if (props.project.id !== project.id || session.value?.id !== sid) return
     item.payload = JSON.parse(content)
   } catch (error) {
     if (current.value && session.value?.id === sid) current.value.error = errorText(error)
@@ -123,160 +146,222 @@ const context = computed(() => {
 })
 </script>
 <template>
-  <div v-if="!session" class="chat-empty empty">
-    <h2>{{ t('chat.startTitle') }}</h2>
-    <p>{{ t('chat.startHelp') }}</p>
-    <n-button
-      :disabled="!data.online(project.connectionId)"
-      type="primary"
-      @click="emit('create')"
-      >{{ t('chat.newSession') }}</n-button
-    ><router-link to="/environment">{{ t('environment.title') }}</router-link>
-  </div>
-  <div v-else class="conversation" :aria-label="t('chat.conversation')">
-    <header class="conversation-head">
-      <div>
-        <strong>{{ session.title }}</strong
-        ><span class="muted">{{ session.agent }}</span>
-      </div>
-      <span class="run-state" aria-live="polite">{{
-        t('chat.state.' + (current?.state ?? 'idle'))
+  <div class="chat-surface">
+    <div v-if="project.deviceLocal" class="device-status" role="status">
+      <strong
+        >{{ t('device.channel') }} · {{ t('device.state.' + device.state(project).state) }}</strong
+      >
+      <n-button
+        v-if="!device.state(project).enabled"
+        size="small"
+        :disabled="
+          !data.online(project.connectionId) ||
+          ['preparing', 'probing'].includes(device.state(project).state)
+        "
+        @click="device.enable(project)"
+        >{{ t('device.enable') }}</n-button
+      >
+      <span
+        v-if="
+          project.deviceLocal &&
+          device.state(project).state === 'closed' &&
+          current?.deviceState?.reason !== 'grace_expired'
+        "
+        >{{ t('device.offlineGrace') }}</span
+      >
+      <span v-if="current?.deviceState?.reason === 'grace_expired'">{{
+        t('device.graceExpired')
       }}</span>
-    </header>
-    <div ref="viewport" class="message-scroll" @scroll="scrollChanged">
-      <div class="history-tools">
-        <n-button v-if="current?.hasMore" size="small" :loading="current.loading" @click="older">{{
-          t('chat.loadEarlier')
-        }}</n-button
-        ><n-spin v-else-if="current?.loading" size="small" />
-      </div>
-      <div class="virtual-content" :style="{ height: virtualizer.getTotalSize() + 'px' }">
-        <article
-          v-for="row in rows"
-          :key="String(row.key)"
-          :ref="measure"
-          :data-index="row.index"
-          class="message-row"
-          :style="{ transform: `translateY(${row.start}px)` }"
-        >
-          <template v-if="groups[row.index].type === 'steps'"
-            ><details class="work-steps">
-              <summary>
-                {{ t('chat.workSteps', { count: groups[row.index].items.length }) }}
-              </summary>
-              <details v-for="item in groups[row.index].items" :key="item.id" class="tool-step">
+      <span v-if="device.state(project).error" role="alert">{{ device.state(project).error }}</span>
+    </div>
+    <div v-if="!session" class="chat-empty empty">
+      <h2>{{ t('chat.startTitle') }}</h2>
+      <p>{{ t('chat.startHelp') }}</p>
+      <n-button
+        :disabled="!data.online(project.connectionId) || !canSend"
+        type="primary"
+        @click="emit('create')"
+        >{{ t('chat.newSession') }}</n-button
+      ><router-link to="/environment">{{ t('environment.title') }}</router-link>
+    </div>
+    <div v-else class="conversation" :aria-label="t('chat.conversation')">
+      <header class="conversation-head">
+        <div>
+          <strong>{{ session.title }}</strong
+          ><span class="muted">{{ session.agent }}</span>
+        </div>
+        <span class="run-state" aria-live="polite">{{
+          t('chat.state.' + (current?.state ?? 'idle'))
+        }}</span>
+      </header>
+      <div ref="viewport" class="message-scroll" @scroll="scrollChanged">
+        <div class="history-tools">
+          <n-button
+            v-if="current?.hasMore"
+            size="small"
+            :loading="current.loading"
+            @click="older"
+            >{{ t('chat.loadEarlier') }}</n-button
+          ><n-spin v-else-if="current?.loading" size="small" />
+        </div>
+        <div class="virtual-content" :style="{ height: virtualizer.getTotalSize() + 'px' }">
+          <article
+            v-for="row in rows"
+            :key="String(row.key)"
+            :ref="measure"
+            :data-index="row.index"
+            class="message-row"
+            :style="{ transform: `translateY(${row.start}px)` }"
+          >
+            <template v-if="groups[row.index].type === 'steps'"
+              ><details class="work-steps">
                 <summary>
-                  {{
-                    item.payload.name ??
-                    t('chat.kind.' + String(item.payload.kind), String(item.payload.kind))
-                  }}
+                  {{ t('chat.workSteps', { count: groups[row.index].items.length }) }}
                 </summary>
-                <pre v-if="item.payload.input">{{ printable(item.payload.input) }}</pre>
-                <pre>{{ printable(item.payload.output ?? item.payload.text) }}</pre>
-                <n-button
+                <details v-for="item in groups[row.index].items" :key="item.id" class="tool-step">
+                  <summary>
+                    {{
+                      item.payload.name ??
+                      t('chat.kind.' + String(item.payload.kind), String(item.payload.kind))
+                    }}
+                  </summary>
+                  <small
+                    v-if="project.deviceLocal && item.payload.kind === 'file_change'"
+                    class="muted"
+                    >{{ t('device.serverFileChange') }}</small
+                  >
+                  <pre v-if="item.payload.input">{{ printable(item.payload.input) }}</pre>
+                  <pre>{{ printable(item.payload.output ?? item.payload.text) }}</pre>
+                  <n-button
+                    v-if="item.payload.truncated && item.complete"
+                    size="tiny"
+                    :loading="loadingBlob === item.id"
+                    @click="blob(item)"
+                    >{{ t('chat.loadFullOutput') }}</n-button
+                  >
+                </details>
+              </details></template
+            >
+            <template v-else v-for="item in groups[row.index].items" :key="item.id">
+              <div v-if="item.type === 'user.message'" class="user-message">
+                <span class="message-author">{{ t('chat.you') }}</span>
+                <div>{{ item.payload.text }}</div>
+                <small>{{ t('chat.delivery.delivered') }}</small>
+              </div>
+              <ApprovalCard
+                v-else-if="item.type === 'approval.request'"
+                :item="item"
+                :load="() => blob(item)"
+                :loading="loadingBlob === item.id"
+                :submit="(id, decision) => chat.approve(project, session!.id, id, decision)"
+              />
+              <details v-else-if="item.payload.kind === 'reasoning'" class="reasoning">
+                <summary>{{ t('chat.reasoning') }}</summary>
+                <MarkdownContent :text="String(item.payload.text ?? '')" />
+              </details>
+              <div v-else-if="item.payload.kind === 'error'" role="alert" class="message-error">
+                <strong>{{ item.payload.code }}</strong>
+                <p>{{ item.payload.text }}</p>
+                <small>{{ item.payload.stage }} · {{ item.payload.hint }}</small>
+              </div>
+              <div v-else class="assistant-message">
+                <span class="message-author">{{ session.agent }}</span
+                ><MarkdownContent :text="String(item.payload.text ?? '')" /><span
+                  v-if="!item.complete"
+                  class="stream-cursor"
+                  aria-hidden="true"
+                  >▍</span
+                ><n-button
                   v-if="item.payload.truncated && item.complete"
                   size="tiny"
                   :loading="loadingBlob === item.id"
                   @click="blob(item)"
                   >{{ t('chat.loadFullOutput') }}</n-button
                 >
-              </details>
-            </details></template
+              </div>
+            </template>
+          </article>
+        </div>
+        <div v-for="message in pending" :key="message.id" class="pending-message user-message">
+          <span class="message-author">{{ t('chat.you') }}</span>
+          <div>{{ message.text }}</div>
+          <small :class="message.status">{{ t('chat.delivery.' + message.status) }}</small>
+          <p v-if="message.status === 'unknown'">{{ t('chat.unknownHelp') }}</p>
+        </div>
+      </div>
+      <button v-if="!follow" class="latest-button" @click="latest">↓ {{ t('chat.latest') }}</button>
+      <n-alert v-if="current?.error" type="error" closable @close="current.error = ''">{{
+        current.error
+      }}</n-alert>
+      <form class="composer" @submit.prevent="canSend && chat.send(project, session.id)">
+        <textarea
+          v-if="current"
+          v-model="current.draft"
+          :aria-label="t('chat.input')"
+          :placeholder="t('chat.inputPlaceholder')"
+          :disabled="!data.online(project.connectionId) || !canSend"
+          rows="3"
+          @keydown="keyboard"
+        />
+        <div class="composer-actions">
+          <small class="muted">{{ t('chat.inputHelp') }}</small
+          ><n-button
+            v-if="current && isRunning(current.state)"
+            type="error"
+            :disabled="current.state === 'stopping' || !data.online(project.connectionId)"
+            @click="chat.stop(project, session.id)"
+            >{{ t('chat.stop') }}</n-button
+          ><n-button
+            v-else
+            attr-type="submit"
+            type="primary"
+            :disabled="
+              !canSend ||
+              !current?.draft.trim() ||
+              !data.online(project.connectionId) ||
+              current?.pending.some((value) => value.status === 'sending')
+            "
+            >{{ t('chat.send') }}</n-button
           >
-          <template v-else v-for="item in groups[row.index].items" :key="item.id">
-            <div v-if="item.type === 'user.message'" class="user-message">
-              <span class="message-author">{{ t('chat.you') }}</span>
-              <div>{{ item.payload.text }}</div>
-              <small>{{ t('chat.delivery.delivered') }}</small>
-            </div>
-            <ApprovalCard
-              v-else-if="item.type === 'approval.request'"
-              :item="item"
-              :submit="(id, decision) => chat.approve(project, session!.id, id, decision)"
-            />
-            <details v-else-if="item.payload.kind === 'reasoning'" class="reasoning">
-              <summary>{{ t('chat.reasoning') }}</summary>
-              <MarkdownContent :text="String(item.payload.text ?? '')" />
-            </details>
-            <div v-else-if="item.payload.kind === 'error'" role="alert" class="message-error">
-              <strong>{{ item.payload.code }}</strong>
-              <p>{{ item.payload.text }}</p>
-              <small>{{ item.payload.stage }} · {{ item.payload.hint }}</small>
-            </div>
-            <div v-else class="assistant-message">
-              <span class="message-author">{{ session.agent }}</span
-              ><MarkdownContent :text="String(item.payload.text ?? '')" /><span
-                v-if="!item.complete"
-                class="stream-cursor"
-                aria-hidden="true"
-                >▍</span
-              ><n-button
-                v-if="item.payload.truncated && item.complete"
-                size="tiny"
-                :loading="loadingBlob === item.id"
-                @click="blob(item)"
-                >{{ t('chat.loadFullOutput') }}</n-button
-              >
-            </div>
-          </template>
-        </article>
-      </div>
-      <div v-for="message in pending" :key="message.id" class="pending-message user-message">
-        <span class="message-author">{{ t('chat.you') }}</span>
-        <div>{{ message.text }}</div>
-        <small :class="message.status">{{ t('chat.delivery.' + message.status) }}</small>
-        <p v-if="message.status === 'unknown'">{{ t('chat.unknownHelp') }}</p>
-      </div>
-    </div>
-    <button v-if="!follow" class="latest-button" @click="latest">↓ {{ t('chat.latest') }}</button>
-    <n-alert v-if="current?.error" type="error" closable @close="current.error = ''">{{
-      current.error
-    }}</n-alert>
-    <form class="composer" @submit.prevent="chat.send(project, session.id)">
-      <textarea
-        v-if="current"
-        v-model="current.draft"
-        :aria-label="t('chat.input')"
-        :placeholder="t('chat.inputPlaceholder')"
-        :disabled="!data.online(project.connectionId)"
-        rows="3"
-        @keydown="keyboard"
-      />
-      <div class="composer-actions">
-        <small class="muted">{{ t('chat.inputHelp') }}</small
-        ><n-button
-          v-if="current && isRunning(current.state)"
-          type="error"
-          :disabled="current.state === 'stopping' || !data.online(project.connectionId)"
-          @click="chat.stop(project, session.id)"
-          >{{ t('chat.stop') }}</n-button
-        ><n-button
-          v-else
-          attr-type="submit"
-          type="primary"
-          :disabled="
-            !current?.draft.trim() ||
-            !data.online(project.connectionId) ||
-            current?.pending.some((value) => value.status === 'sending')
-          "
-          >{{ t('chat.send') }}</n-button
+        </div>
+      </form>
+      <footer class="session-status">
+        <span v-if="policy?.sandbox"
+          >{{ t('device.sandbox') }}: {{ policy.sandbox }} · network_access={{
+            policy.networkAccess
+          }}</span
         >
-      </div>
-    </form>
-    <footer class="session-status">
-      <span>{{ session.model }}</span
-      ><span
-        >{{ t('chat.permission') }}:
-        {{ t('chat.mode.' + session.permissionMode, session.permissionMode) }}</span
-      ><span v-if="context">{{ t('chat.context') }} {{ context }}</span
-      ><span class="execution-target" :title="project.path"
-        >{{ data.connections.find((value) => value.id === project.connectionId)?.name }} ·
-        {{ project.path }}</span
-      >
-    </footer>
+        <span>{{ session.model }}</span
+        ><span
+          >{{ t('chat.permission') }}:
+          {{ t('chat.mode.' + session.permissionMode, session.permissionMode) }}</span
+        ><span v-if="context">{{ t('chat.context') }} {{ context }}</span
+        ><span v-if="project.deviceLocal">{{
+          t('device.state.' + device.state(project).state)
+        }}</span>
+        <span class="execution-target" :title="project.path"
+          >{{ t(project.deviceLocal ? 'projects.localDevice' : 'projects.server') }} ·
+          {{ data.connections.find((value) => value.id === project.connectionId)?.name }} ·
+          {{ project.path }}</span
+        >
+      </footer>
+    </div>
   </div>
 </template>
 <style scoped>
+.chat-surface {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+.device-status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+}
 .conversation {
   display: flex;
   flex-direction: column;

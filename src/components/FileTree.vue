@@ -33,13 +33,13 @@ const operationTarget = ref<Project>()
 const operationPath = ref('')
 let generation = 0
 const options = computed(() =>
-  ['newFile', 'newDirectory', 'rename', 'delete', 'copyPath', 'openTerminal', 'download'].map(
-    (key) => ({
+  ['newFile', 'newDirectory', 'rename', 'delete', 'copyPath', 'openTerminal', 'download']
+    .filter((key) => key !== 'download' || !props.project.deviceLocal)
+    .map((key) => ({
       key,
       label: t('files.' + key),
       disabled: !selected.value && ['rename', 'delete', 'copyPath', 'download'].includes(key),
-    }),
-  ),
+    })),
 )
 const dirname = (path: string) => path.slice(0, path.lastIndexOf('/')) || '/'
 function toNodes(entries: FileEntry[]): Node[] {
@@ -51,7 +51,11 @@ function toNodes(entries: FileEntry[]): Node[] {
   }))
 }
 async function refresh() {
-  const request = guard.begin(props.project.connectionId, props.project.id)
+  const request = guard.begin(
+    props.project.connectionId,
+    props.project.id,
+    props.project.deviceLocal,
+  )
   loading.value = true
   error.value = ''
   generation++
@@ -71,7 +75,7 @@ async function refresh() {
 async function load(node: TreeOption) {
   const n = node as Node
   const project = { ...props.project }
-  const request = target(project.connectionId, project.id)
+  const request = target(project.connectionId, project.id, project.deviceLocal)
   const version = generation
   try {
     const entries = unwrap(
@@ -92,7 +96,7 @@ async function openEntry(entry: FileEntry) {
   try {
     if (entry.kind === 'directory') return
     if (entry.kind === 'symlink') {
-      const request = target(project.connectionId, project.id)
+      const request = target(project.connectionId, project.id, project.deviceLocal)
       const stat = unwrap(
         request,
         await call<Reply<FileEntry>>('fs_stat', { target: request, path: entry.path }),
@@ -146,11 +150,11 @@ async function action(key: string) {
     workspace.openTerminal(project, 'shell', directory)
     return
   }
-  if (key === 'download' && entry) {
+  if (key === 'download' && entry && !project.deviceLocal) {
     try {
       const destination = await open({ directory: true, multiple: false })
       if (typeof destination !== 'string') return
-      const request = target(project.connectionId, project.id)
+      const request = target(project.connectionId, project.id, project.deviceLocal)
       unwrap(
         request,
         await call<Reply<{ transferId: string }>>('transfer_download', {
@@ -168,7 +172,7 @@ async function action(key: string) {
   if (key === 'delete' && entry) {
     if (!window.confirm(`${t('files.deleteHelp')}\n\n${project.name} · ${entry.path}`)) return
     try {
-      const request = target(project.connectionId, project.id)
+      const request = target(project.connectionId, project.id, project.deviceLocal)
       unwrap(request, await call<Reply<null>>('fs_delete', { target: request, path: entry.path }))
       if (props.project.id === project.id) await refresh()
     } catch (e) {
@@ -198,7 +202,7 @@ async function perform() {
     operation.value === 'rename'
       ? operationPath.value
       : `${operationPath.value.replace(/\/$/, '')}/${name.value}`
-  const request = target(project.connectionId, project.id)
+  const request = target(project.connectionId, project.id, project.deviceLocal)
   try {
     const command =
       operation.value === 'rename'

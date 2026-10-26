@@ -21,7 +21,7 @@ async function refresh() {
 }
 async function cancel(task: Transfer) {
   try {
-    const request = target(task.target.connectionId, task.target.projectId)
+    const request = target(task.target.connectionId, task.target.projectId, task.target.deviceLocal)
     unwrap(
       request,
       await call<Reply<null>>('transfer_cancel', { target: request, transferId: task.id }),
@@ -33,7 +33,7 @@ async function cancel(task: Transfer) {
 }
 async function retry(task: Transfer) {
   try {
-    const request = target(task.target.connectionId, task.target.projectId)
+    const request = target(task.target.connectionId, task.target.projectId, task.target.deviceLocal)
     unwrap(
       request,
       await call<Reply<{ transferId: string }>>('transfer_download', {

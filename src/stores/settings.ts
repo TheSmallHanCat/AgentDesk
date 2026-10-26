@@ -3,6 +3,7 @@ import { reactive } from 'vue'
 import type { Settings } from '../types.ts'
 import { call, desktop } from '../utils/api.ts'
 export const defaultSettings = (): Settings => ({
+  localShell: 'pwsh',
   theme: 'system',
   language: 'zh-CN',
   closeAction: 'ask',

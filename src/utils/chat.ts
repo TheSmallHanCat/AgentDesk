@@ -5,6 +5,7 @@ export interface ChatItem {
   id: string
   seq: number
   lastSeq: number
+  blobSeq?: number
   runId?: string
   type: string
   payload: Record<string, unknown>
@@ -17,6 +18,8 @@ export interface ChatTimeline {
   state: string
   stateSeq: number
   resolutions: Record<string, { seq: number; payload: Record<string, unknown> }>
+  deviceState?: Record<string, unknown>
+  deviceSeq?: number
   usage?: Record<string, unknown>
   seen: Set<number>
 }
@@ -48,6 +51,13 @@ export function applyEvents(state: ChatTimeline, events: HostEvent[]) {
     }
     if (event.type === 'usage') {
       state.usage = payload
+      continue
+    }
+    if (event.type === 'device.state' || event.type === 'tunnel.state') {
+      if (event.seq >= (state.deviceSeq ?? 0)) {
+        state.deviceSeq = event.seq
+        state.deviceState = payload
+      }
       continue
     }
     if (event.type === 'session.updated') continue
@@ -83,6 +93,7 @@ export function applyEvents(state: ChatTimeline, events: HostEvent[]) {
       state.items.push(item)
     }
     item.lastSeq = event.seq
+    if (payload.blob) item.blobSeq = event.seq
     item.type = event.type === 'item.delta' ? 'item.started' : event.type
     if (event.type === 'item.delta' && !snapshot) {
       item.payload = {

@@ -75,6 +75,13 @@ async function save() {
         <span>{{ t('settings.fontSize') }}</span
         ><n-input-number v-model:value="settings.values.fontSize" :min="10" :max="32" />
       </div>
+      <div class="setting-row">
+        <span>{{ t('settings.localShell') }}</span
+        ><n-input
+          v-model:value="settings.values.localShell"
+          :placeholder="t('settings.localShellHelp')"
+        />
+      </div>
     </div>
     <div class="panel" style="margin-top: 20px">
       <h2>{{ t('settings.notifications') }}</h2>

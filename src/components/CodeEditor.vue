@@ -72,7 +72,11 @@ async function saveFile(force = false) {
   busy.value = true
   props.tab.error = ''
   const content = props.tab.content
-  const request = target(props.tab.target.connectionId, props.tab.target.projectId)
+  const request = target(
+    props.tab.target.connectionId,
+    props.tab.target.projectId,
+    props.tab.target.deviceLocal,
+  )
   try {
     const document = unwrap(
       request,
@@ -99,7 +103,11 @@ async function saveFile(force = false) {
   }
 }
 async function remote() {
-  const request = target(props.tab.target.connectionId, props.tab.target.projectId)
+  const request = target(
+    props.tab.target.connectionId,
+    props.tab.target.projectId,
+    props.tab.target.deviceLocal,
+  )
   return unwrap(
     request,
     await call<Reply<FileDocument>>('fs_read', { target: request, path: props.tab.path }),

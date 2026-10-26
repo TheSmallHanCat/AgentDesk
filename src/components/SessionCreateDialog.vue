@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useDeviceStore } from '../stores/device'
 import { useChatStore } from '../stores/chat'
 import { errorText } from '../utils/api'
 import type { Project } from '../types'
@@ -8,6 +9,7 @@ const props = defineProps<{ project?: Project }>()
 const emit = defineEmits<{ close: [] }>()
 const { t } = useI18n(),
   chat = useChatStore()
+const device = useDeviceStore()
 const agent = ref(''),
   model = ref(''),
   mode = ref('default'),
@@ -106,7 +108,12 @@ async function create() {
         ><n-button
           type="primary"
           :loading="busy"
-          :disabled="!agent || !model || !selected?.available"
+          :disabled="
+            !agent ||
+            !model ||
+            !selected?.available ||
+            (!!project?.deviceLocal && !device.state(project).enabled)
+          "
           @click="create"
           >{{ t('chat.create') }}</n-button
         ></n-form

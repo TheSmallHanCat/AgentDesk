@@ -29,7 +29,7 @@ function split() {
   if (store.tabs.length <= store.panes.length) {
     const current = store.tabs.find((t) => t.id === active.value)
     const project = data.projects.find((p) => p.id === current?.target.projectId)
-    if (!project || !data.online(project.connectionId)) return
+    if (!project || (!project.deviceLocal && !data.online(project.connectionId))) return
     const original = active.value
     store.openTerminal(
       project,

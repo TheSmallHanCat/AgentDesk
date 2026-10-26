@@ -39,7 +39,7 @@ export const projectKey = (project: Pick<Project, 'connectionId' | 'id'>) =>
 export const sessionKey = (project: Pick<Project, 'connectionId' | 'id'>, id: string) =>
   projectKey(project) + ':' + id
 const requestTarget = (project: Project, sessionId?: string): Target => ({
-  ...target(project.connectionId, project.id),
+  ...target(project.connectionId, project.id, project.deviceLocal),
   ...(sessionId ? { sessionId } : {}),
 })
 
@@ -50,6 +50,7 @@ export const useChatStore = defineStore('chat', () => {
   const agents = reactive<Record<string, Record<string, AgentCapability>>>({})
   const errors = reactive<Record<string, string>>({})
   const loading = reactive<Record<string, boolean>>({})
+  const archived = reactive<Record<string, boolean>>({})
   const revisions = new Map<string, number>()
   let disposed = false
   const draftVersions = new Map<string, number>()
@@ -153,7 +154,13 @@ export const useChatStore = defineStore('chat', () => {
     errors[key] = ''
     try {
       const owner = requestTarget(project)
-      const rows = unwrap(owner, await call<Reply<Session[]>>('session_list', { target: owner }))
+      const rows = unwrap(
+        owner,
+        await call<Reply<Session[]>>('session_list', {
+          target: owner,
+          archived: archived[key] ?? false,
+        }),
+      )
       if (revisions.get(key) !== revision) return
       sessions[key] = rows
       const probe = requestTarget(project)
@@ -165,9 +172,13 @@ export const useChatStore = defineStore('chat', () => {
       )
       if (revisions.get(key) !== revision) return
       agents[project.connectionId] = environment.agents
-      if (!rows.some((value) => value.id === active[key])) active[key] = rows[0]?.id ?? ''
-      const session = selected(project)
-      if (session) await select(project, session.id)
+      const nextId = rows.some((value) => value.id === active[key]) ? active[key] : rows[0]?.id
+      if (nextId) await select(project, nextId)
+      else {
+        const previous = active[key]
+        active[key] = ''
+        if (previous) await releaseSession(state(project, previous))
+      }
     } catch (error) {
       if (revisions.get(key) === revision) errors[key] = errorText(error)
     } finally {
@@ -216,11 +227,29 @@ export const useChatStore = defineStore('chat', () => {
       session.updatedAt = fresh.at(-1)!.ts
     }
   }
+  async function releaseSession(current: SessionState) {
+    const id = current.subscriptionId,
+      owner = current.subscriptionTarget
+    current.subscriptionRevision = (current.subscriptionRevision ?? 0) + 1
+    current.subscriptionId = undefined
+    current.subscriptionTarget = undefined
+    current.subscribing = false
+    if (id && owner) await call('session_unsubscribe', { target: owner, subscriptionId: id })
+  }
+  async function restore(project: Project, sessionId: string) {
+    const owner = requestTarget(project, sessionId)
+    unwrap(owner, await call<Reply<Session>>('session_restore', { target: owner }))
+    await refresh(project)
+  }
   async function select(project: Project, sessionId: string) {
+    const previous = active[projectKey(project)]
     active[projectKey(project)] = sessionId
+    if (previous && previous !== sessionId) await releaseSession(state(project, previous))
+    if (active[projectKey(project)] !== sessionId) return
     const current = state(project, sessionId)
     void loadDraft(project, sessionId)
     if (!current.loaded) await history(project, sessionId)
+    if (active[projectKey(project)] !== sessionId) return
     if (current.subscriptionId || current.subscribing) return
     current.subscribing = true
     const subscriptionRevision = current.subscriptionRevision ?? 0
@@ -450,6 +479,8 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
   return {
+    archived,
+    restore,
     sessions,
     active,
     states,

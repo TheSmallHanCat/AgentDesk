@@ -65,7 +65,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     tabs.value.push({
       id,
       type: 'terminal',
-      target: target(project.connectionId, project.id),
+      target: target(project.connectionId, project.id, project.deviceLocal),
       title:
         kind === 'shell'
           ? 'Shell'
@@ -95,7 +95,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     select(id)
   }
   async function openFile(project: Project, path: string) {
-    const request = reads.begin(project.connectionId, project.id)
+    const request = reads.begin(project.connectionId, project.id, project.deviceLocal)
     const existing = tabs.value.find(
       (t) => t.type === 'editor' && t.path === path && sameResource(t.target, request),
     )

@@ -20,8 +20,12 @@ const chat = useChatStore()
 const creating = ref<Project>()
 const renaming = ref<{ project: Project; id: string }>()
 const renameTitle = ref('')
-const deleting = ref<{ project: Project; id: string; title: string }>()
+const deleting = ref<{ project: Project; id: string; title: string; agent: string }>()
 const actionError = ref('')
+function archivedChanged(p: Project, event: Event) {
+  chat.archived[projectKey(p)] = (event.target as HTMLInputElement).checked
+  void chat.refresh(p)
+}
 function navigateSession(p: Project, id: string) {
   void router.push('/workbench/' + p.id + '/' + encodeURIComponent(id))
   selectedSession(p, id)
@@ -157,6 +161,13 @@ onUnmounted(() => stopDrag?.())
           >‹</n-button
         >
       </div>
+      <label v-if="project" class="muted"
+        ><input
+          type="checkbox"
+          :checked="chat.archived[projectKey(project)]"
+          @change="archivedChanged(project, $event)"
+        />{{ t('chat.archived') }}</label
+      >
       <section v-for="p in listed" :key="p.id" class="project-group">
         <div class="project-group-head">
           <router-link :to="'/workbench/' + p.id" class="project-link"
@@ -199,13 +210,24 @@ onUnmounted(() => stopDrag?.())
             trigger="click"
             :options="[
               { key: 'rename', label: t('common.rename') },
-              { key: 'delete', label: t('common.delete') },
+              ...(session.archived ? [{ key: 'restore', label: t('projects.restore') }] : []),
+              {
+                key: 'delete',
+                label: t(session.agent === 'fake' ? 'common.delete' : 'chat.archiveSession'),
+              },
             ]"
             @select="
               (key) =>
-                key === 'rename'
-                  ? renameSession(p, session.id, session.title)
-                  : (deleting = { project: p, id: session.id, title: session.title })
+                key === 'restore'
+                  ? chat.restore(p, session.id)
+                  : key === 'rename'
+                    ? renameSession(p, session.id, session.title)
+                    : (deleting = {
+                        project: p,
+                        id: session.id,
+                        title: session.title,
+                        agent: session.agent,
+                      })
             "
             ><span
               class="session-menu"
@@ -240,7 +262,7 @@ onUnmounted(() => stopDrag?.())
           <div class="actions">
             <n-button
               size="small"
-              :disabled="!data.online(project.connectionId)"
+              :disabled="!project.deviceLocal && !data.online(project.connectionId)"
               @click="workspace.openTerminal(project)"
               >{{ t('workbench.shell') }}</n-button
             ><n-dropdown
@@ -280,7 +302,11 @@ onUnmounted(() => stopDrag?.())
       </div>
     </div>
     <div v-if="project && files" class="file-panel">
-      <FileTree v-if="data.online(project.connectionId)" :project="project" :key="project.id" />
+      <FileTree
+        v-if="project.deviceLocal || data.online(project.connectionId)"
+        :project="project"
+        :key="project.id"
+      />
       <div v-else class="empty">{{ t('workbench.disconnected') }}</div>
     </div>
     <SessionCreateDialog :project="creating" @close="creating = undefined" />
@@ -294,12 +320,16 @@ onUnmounted(() => stopDrag?.())
       ></n-modal
     >
     <n-modal :show="!!deleting" @update:show="(value) => !value && (deleting = undefined)"
-      ><n-card style="width: 440px" :title="t('chat.deleteSession')"
+      ><n-card
+        style="width: 440px"
+        :title="t(deleting?.agent === 'fake' ? 'chat.deleteSession' : 'chat.archiveSession')"
         ><p>{{ t('chat.deleteConfirm', { title: deleting?.title }) }}</p>
         <p v-if="actionError" role="alert">{{ actionError }}</p>
         <div class="actions">
           <n-button @click="deleting = undefined">{{ t('common.cancel') }}</n-button
-          ><n-button type="error" @click="deleteSession">{{ t('common.delete') }}</n-button>
+          ><n-button type="error" @click="deleteSession">{{
+            t(deleting?.agent === 'fake' ? 'common.delete' : 'chat.archiveSession')
+          }}</n-button>
         </div></n-card
       ></n-modal
     >

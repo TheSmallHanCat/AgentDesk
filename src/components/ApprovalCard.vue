@@ -6,6 +6,8 @@ import type { ChatItem } from '../utils/chat'
 import type { AgentQuestion, ApprovalDecision } from '../protocol/generated'
 const props = defineProps<{
   item: ChatItem
+  load?: () => Promise<void>
+  loading?: boolean
   submit: (approvalId: string, decision: ApprovalDecision) => Promise<void>
 }>()
 const { t } = useI18n()
@@ -13,6 +15,12 @@ const answers = ref<Record<string, string | string[]>>({})
 const free = ref<Record<string, string>>({})
 const busy = ref(false)
 const error = ref('')
+const inputText = computed(() =>
+  typeof props.item.payload.input === 'string'
+    ? props.item.payload.input
+    : JSON.stringify(props.item.payload.input, null, 2),
+)
+const summary = computed(() => (inputText.value ?? '').slice(0, 320))
 const questions = computed(() =>
   Array.isArray(props.item.payload.questions)
     ? (props.item.payload.questions as AgentQuestion[])
@@ -59,8 +67,15 @@ async function respond(behavior: 'allow' | 'deny') {
       <strong>{{ questions.length ? t('chat.question') : t('chat.approval') }}</strong
       ><span>{{ item.payload.tool }}</span>
     </header>
+    <p v-if="summary" class="approval-summary">{{ summary }}</p>
+    <details v-if="item.payload.input || item.payload.blob">
+      <summary>{{ t('chat.fullInput') }}</summary>
+      <n-button v-if="item.payload.blob" size="small" :loading="loading" @click="load?.()">{{
+        t('chat.loadFullOutput')
+      }}</n-button>
+      <pre v-else>{{ inputText }}</pre>
+    </details>
     <template v-if="!item.complete">
-      <pre v-if="item.payload.input">{{ JSON.stringify(item.payload.input, null, 2) }}</pre>
       <fieldset v-for="question in questions" :key="question.question" :disabled="busy">
         <legend>{{ question.question }}</legend>
         <label v-for="option in question.options" :key="option.label"
@@ -88,7 +103,7 @@ async function respond(behavior: 'allow' | 'deny') {
           type="primary"
           size="small"
           :loading="busy"
-          :disabled="!canSubmit"
+          :disabled="!canSubmit || !!item.payload.blob || loading"
           @click="respond('allow')"
           >{{ questions.length ? t('chat.submitAnswer') : t('chat.allow') }}</n-button
         >

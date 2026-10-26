@@ -18,8 +18,10 @@ const archived = ref(false)
 const suggestions = ref<string[]>([])
 const recent = ref<string[]>([])
 const blank = (): Project => ({
+  deviceLocal: false,
   id: '',
-  connectionId: data.connections.find((c) => data.online(c.id))?.id ?? '',
+  connectionId:
+    data.connections.find((c) => data.online(c.id))?.id ?? data.connections[0]?.id ?? '',
   name: '',
   path: '/',
   description: '',
@@ -35,28 +37,43 @@ const recentGuard = new RequestGuard()
 let timer: ReturnType<typeof setTimeout> | undefined
 const groups = computed(() =>
   data.connections
-    .map((connection) => ({
-      connection,
-      projects: data.projects
-        .filter(
-          (p) =>
-            p.connectionId === connection.id &&
-            p.archived === archived.value &&
-            `${p.name} ${p.path} ${p.description}`
-              .toLowerCase()
-              .includes(search.value.toLowerCase()),
-        )
-        .sort((a, b) => Number(b.pinned) - Number(a.pinned)),
-    }))
+    .flatMap((connection) =>
+      [false, true].map((local) => ({
+        connection,
+        local,
+        projects: data.projects
+          .filter(
+            (p) =>
+              p.connectionId === connection.id &&
+              !!p.deviceLocal === local &&
+              p.archived === archived.value &&
+              `${p.name} ${p.path} ${p.description}`
+                .toLowerCase()
+                .includes(search.value.toLowerCase()),
+          )
+          .sort((a, b) => Number(b.pinned) - Number(a.pinned)),
+      })),
+    )
     .filter((g) => g.projects.length),
 )
 const options = computed(() =>
-  data.connections.map((c) => ({ label: c.name, value: c.id, disabled: !data.online(c.id) })),
+  data.connections.map((c) => ({
+    label: c.name,
+    value: c.id,
+    disabled: !form.deviceLocal && !data.online(c.id),
+  })),
 )
 function edit(p?: Project) {
   Object.assign(form, blank(), p)
   error.value = ''
   modal.value = true
+}
+async function pickLocal() {
+  const path = await call<string | null>('project_pick_local')
+  if (path) {
+    form.path = path
+    if (!form.name) form.name = path.split('/').at(-1) ?? ''
+  }
 }
 async function save(createDir = false) {
   busy.value = true
@@ -102,7 +119,14 @@ watch(
     clearTimeout(timer)
     guard.invalidate()
     suggestions.value = []
-    if (!modal.value || form.id || !form.connectionId || !data.online(form.connectionId)) return
+    if (
+      form.deviceLocal ||
+      !modal.value ||
+      form.id ||
+      !form.connectionId ||
+      !data.online(form.connectionId)
+    )
+      return
     const request = guard.begin(form.connectionId)
     timer = setTimeout(async () => {
       try {
@@ -122,7 +146,7 @@ watch(
   async ([id, opened]) => {
     recent.value = []
     recentGuard.invalidate()
-    if (!opened || !id || !desktop) return
+    if (form.deviceLocal || !opened || !id || !desktop) return
     const request = recentGuard.begin(id)
     try {
       const reply = await call<Reply<string[]>>('dir_recent', { target: request })
@@ -145,12 +169,9 @@ onUnmounted(() => {
         <h1>{{ t('projects.title') }}</h1>
         <p class="muted">{{ t('projects.description') }}</p>
       </div>
-      <n-button
-        type="primary"
-        :disabled="!data.connections.some((c) => data.online(c.id))"
-        @click="edit()"
-        >{{ t('projects.new') }}</n-button
-      >
+      <n-button type="primary" :disabled="!data.connections.length" @click="edit()">{{
+        t('projects.new')
+      }}</n-button>
     </div>
     <div class="actions" style="margin-bottom: 24px">
       <n-input
@@ -166,8 +187,13 @@ onUnmounted(() => {
       <p>{{ t('projects.emptyHelp') }}</p>
       <router-link to="/connections">{{ t('nav.connections') }}</router-link>
     </div>
-    <section v-for="group in groups" :key="group.connection.id" style="margin-bottom: 28px">
+    <section
+      v-for="group in groups"
+      :key="group.connection.id + group.local"
+      style="margin-bottom: 28px"
+    >
       <h2>
+        {{ group.local ? t('projects.localDevice') : t('projects.server') }} ·
         {{ group.connection.name }}
         <span class="muted" style="font-size: 12px">{{ group.connection.host }}</span>
       </h2>
@@ -199,14 +225,30 @@ onUnmounted(() => {
         :title="t(form.id ? 'common.edit' : 'projects.new')"
         closable
         @close="modal = false"
-        ><n-form label-placement="top"
+        ><n-form label-placement="top">
+          <n-form-item :label="t('projects.location')"
+            ><n-select
+              :value="form.deviceLocal ? 'local' : 'remote'"
+              @update:value="form.deviceLocal = $event === 'local'"
+              :disabled="!!form.id"
+              :options="[
+                { label: t('projects.server'), value: 'remote' },
+                { label: t('projects.localDevice'), value: 'local' },
+              ]"
+          /></n-form-item>
+          <n-form-item v-if="form.deviceLocal" :label="t('projects.directory')"
+            ><n-input :value="form.path" readonly /><n-button
+              :disabled="!!form.id"
+              @click="pickLocal"
+              >{{ t('projects.chooseLocal') }}</n-button
+            ></n-form-item
           ><n-form-item :label="t('projects.connection')"
             ><n-select
               v-model:value="form.connectionId"
               :options="options"
               :disabled="!!form.id" /></n-form-item
           ><n-form-item :label="t('common.name')"><n-input v-model:value="form.name" /></n-form-item
-          ><n-form-item :label="t('projects.directory')"
+          ><n-form-item v-if="!form.deviceLocal" :label="t('projects.directory')"
             ><n-auto-complete
               v-model:value="form.path"
               :options="suggestions.map((value) => ({ label: value, value }))"
