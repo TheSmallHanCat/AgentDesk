@@ -39,6 +39,7 @@ struct ServerHandler {
     observed: Arc<Observed>,
     public: PublicKey,
     channels: HashMap<ChannelId, Channel<server::Msg>>,
+    stdin_scripts: HashSet<ChannelId>,
 }
 impl server::Handler for ServerHandler {
     type Error = russh::Error;
@@ -98,6 +99,9 @@ impl server::Handler for ServerHandler {
         session: &mut Session,
     ) -> Result<(), Self::Error> {
         self.observed.exec.fetch_add(1, Ordering::SeqCst);
+        if _command == b"exec /bin/sh -s" {
+            self.stdin_scripts.insert(id);
+        }
         if _command == b"fixture-disconnect" {
             session.disconnect(russh::Disconnect::ByApplication, "fixture disconnect", "en")?;
             return Ok(());
@@ -118,6 +122,9 @@ impl server::Handler for ServerHandler {
                 .any(|w| w == b"fixture-disconnect")
             {
                 session.disconnect(russh::Disconnect::ByApplication, "fixture disconnect", "en")?;
+                return Ok(());
+            }
+            if self.stdin_scripts.remove(&id) {
                 return Ok(());
             }
             session.data(id, data.to_vec())?;
@@ -396,6 +403,7 @@ impl Fixture {
                     observed: obs.clone(),
                     public: public.clone(),
                     channels: HashMap::new(),
+                    stdin_scripts: HashSet::new(),
                 };
                 let config = config.clone();
                 tokio::spawn(async move {

@@ -63,7 +63,15 @@ impl PtyManager {
         let mut initial = Vec::with_capacity(32768);
         let startup = async {
             channel
-                .request_pty(true, "xterm-256color", cols, rows, 0, 0, &[])
+                .request_pty(
+                    true,
+                    "xterm-256color",
+                    cols,
+                    rows,
+                    0,
+                    0,
+                    &[(russh::Pty::ECHO, 0)],
+                )
                 .await
                 .map_err(|e| AppError::io("pty", e))?;
             confirm(&mut channel, "pty-request", &mut initial).await?;
@@ -355,7 +363,7 @@ pub fn command(path: &str, kind: &str) -> AppResult<String> {
     // Only /bin/sh parses this script. The final interactive program remains the
     // user's shell; csh/tcsh require -l to be used without a -c command.
     Ok(format!(
-        "cd {} || exit 1\nshell=${{SHELL:-/bin/sh}}\n{action}\n",
+        "cd {} || exit 1\nshell=${{SHELL:-/bin/sh}}\nstty echo || exit 1\n{action}\n",
         quote(path)
     ))
 }
