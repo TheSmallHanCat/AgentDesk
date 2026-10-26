@@ -240,6 +240,7 @@ class ProjectUpsertParams:
     name: str
     defaultAgent: str | None = None
     kind: Literal['remote', 'local'] | None = None
+    deviceId: str | None = None
 
 
 @dataclass(kw_only=True)
@@ -346,9 +347,19 @@ class EventBlobParams:
     offset: int | None = None
     limit: int | None = None
 
-DeviceRegisterParams = dict[str, JsonValue]
 
-DeviceTunnelReadyParams = dict[str, JsonValue]
+@dataclass(kw_only=True)
+class DeviceRegisterParams:
+    pass
+
+
+@dataclass(kw_only=True)
+class DeviceTunnelReadyParams:
+    generation: str
+    user: str
+    privateKey: str
+    hostPublicKey: str
+    scriptCommand: str
 
 DeviceListParams = dict[str, JsonValue]
 
@@ -442,3 +453,16 @@ class DeviceOfflineParams:
 @dataclass(kw_only=True)
 class AgentTerminalStartParams:
     agent: str
+
+
+@dataclass(kw_only=True)
+class DeviceRegisterResult:
+    tunnelSocket: str
+    generation: str
+    hostKeyPinRequired: bool
+
+
+@dataclass(kw_only=True)
+class DeviceTunnelReadyResult:
+    state: str
+    generation: str

@@ -2,6 +2,7 @@ pub mod commands;
 pub mod db;
 pub mod error;
 pub mod host;
+pub mod local;
 pub mod models;
 pub mod platform;
 pub mod secrets;
@@ -90,6 +91,8 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            commands::device::device_status,
+            commands::device::device_enable,
             commands::env::env_probe,
             commands::env::env_install_plan,
             commands::env::env_install_run,
@@ -106,6 +109,7 @@ pub fn run() {
             commands::session::session_history,
             commands::session::session_rename,
             commands::session::session_delete,
+            commands::session::session_restore,
             commands::session::session_subscribe,
             commands::session::session_unsubscribe,
             commands::session::event_blob,
@@ -133,6 +137,7 @@ pub fn run() {
             commands::sys::sys_notify,
             commands::project::project_list,
             commands::project::project_save,
+            commands::project::project_pick_local,
             commands::project::project_archive,
             commands::project::dir_recent,
             commands::project::dir_complete,

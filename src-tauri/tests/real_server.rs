@@ -133,6 +133,7 @@ impl Context {
     async fn connect(&self, c: &Connection, credential: Option<String>) -> Target {
         must(self.db.save_connection(c));
         let target = Target {
+            device_local: false,
             connection_id: c.id.clone(),
             project_id: None,
             session_id: None,
@@ -208,6 +209,7 @@ async fn real_authentication_and_fingerprints() {
         let c = env.connection(false, key);
         must(context.db.save_connection(&c));
         let t = Target {
+            device_local: false,
             connection_id: c.id,
             project_id: None,
             session_id: None,
@@ -281,6 +283,7 @@ async fn real_files_terminals_and_downloads() {
     let c = env.ordinary();
     let mut t = context.connect(&c, env.credential(&c)).await;
     let root = Project {
+        device_local: false,
         id: "e2e-project".into(),
         connection_id: c.id.clone(),
         name: "E2E".into(),
@@ -295,6 +298,7 @@ async fn real_files_terminals_and_downloads() {
     };
     must(context.db.save_project(&root));
     must(context.db.save_project(&Project {
+        device_local: false,
         id: "second-project".into(),
         path: format!("{BASE}/another-project"),
         ..root.clone()

@@ -90,6 +90,11 @@ export interface Session {
   createdAt: string;
   updatedAt: string;
   path?: string;
+  archived?: boolean;
+  kind?: string;
+  deviceId?: string | null;
+  projectPath?: string;
+  executionPolicy?: JsonValue;
 }
 
 export interface HostProject {
@@ -100,6 +105,8 @@ export interface HostProject {
   defaultAgent?: string | null;
   createdAt?: string;
   archived?: boolean;
+  nativeRoot?: string | null;
+  deviceId?: string | null;
 }
 
 export interface QuestionOption {
@@ -197,7 +204,8 @@ export interface ProjectUpsertParams {
   path: string;
   name: string;
   defaultAgent?: string;
-  kind?: "remote";
+  kind?: "remote" | "local";
+  deviceId?: string;
 }
 
 export interface ProjectArchiveParams {
@@ -207,6 +215,7 @@ export interface ProjectArchiveParams {
 
 export interface SessionListParams {
   projectId: string;
+  archived?: boolean;
 }
 
 export interface SessionCreateParams {
@@ -227,7 +236,8 @@ export interface SessionDeleteParams {
 }
 
 export interface SessionDeleteResult {
-  deleted: boolean;
+  deleted?: boolean;
+  archived?: boolean;
 }
 
 export interface SessionHistoryParams {
@@ -247,6 +257,7 @@ export interface RunAppendParams {
   sessionId: string;
   runId: string;
   text: string;
+  clientMsgId: string;
 }
 
 export interface RunStopParams {
@@ -266,6 +277,7 @@ export interface ApprovalRespondResult {
 
 export interface SyncSubscribeParams {
   sessionId: string;
+  subscriptionId?: string;
 }
 
 export interface SyncSubscribeResult {
@@ -285,9 +297,16 @@ export interface EventBlobParams {
   limit?: number;
 }
 
-export type DeviceRegisterParams = Record<string, JsonValue>;
+export interface DeviceRegisterParams {
+}
 
-export type DeviceTunnelReadyParams = Record<string, JsonValue>;
+export interface DeviceTunnelReadyParams {
+  generation: string;
+  user: string;
+  privateKey: string;
+  hostPublicKey: string;
+  scriptCommand: string;
+}
 
 export type DeviceListParams = Record<string, JsonValue>;
 
@@ -347,4 +366,31 @@ export interface HostPrepareShutdownResult {
 
 export interface HostCancelShutdownResult {
   cancelled: true;
+}
+
+export interface SessionRestoreParams {
+  sessionId: string;
+}
+
+export interface SyncUnsubscribeParams {
+  sessionId: string;
+  subscriptionId?: string;
+}
+
+export interface DeviceOfflineParams {
+}
+
+export interface AgentTerminalStartParams {
+  agent: string;
+}
+
+export interface DeviceRegisterResult {
+  tunnelSocket: string;
+  generation: string;
+  hostKeyPinRequired: boolean;
+}
+
+export interface DeviceTunnelReadyResult {
+  state: string;
+  generation: string;
 }

@@ -19,7 +19,10 @@ pub async fn project_save(
     }
     let existing = state.db.project(&project.id).ok();
     if let Some(old) = existing {
-        if old.path != project.path || old.connection_id != project.connection_id {
+        if old.path != project.path
+            || old.connection_id != project.connection_id
+            || old.device_local != project.device_local
+        {
             return Err(AppError::new(
                 "E_TARGET",
                 "project",
@@ -29,7 +32,22 @@ pub async fn project_save(
         state.db.save_project(&project)?;
         return Ok(project);
     }
+    if project.device_local {
+        let path =
+            std::fs::canonicalize(&project.path).map_err(|e| AppError::io("local.project", e))?;
+        if !path.is_dir() {
+            return Err(AppError::new(
+                "E_NOT_DIRECTORY",
+                "local.project",
+                "Project path is not a directory",
+            ));
+        }
+        project.path = crate::platform::display_local_path(&path);
+        state.db.save_project(&project)?;
+        return Ok(project);
+    }
     let target = Target {
+        device_local: false,
         connection_id: project.connection_id.clone(),
         project_id: None,
         session_id: None,
@@ -121,4 +139,18 @@ pub async fn dir_complete(
     }
     .await;
     sftp::finish(s, result).await.map(|v| target.reply(v))
+}
+
+#[tauri::command]
+pub async fn project_pick_local(app: tauri::AppHandle) -> AppResult<Option<String>> {
+    use tauri_plugin_dialog::DialogExt;
+    let path = tokio::task::spawn_blocking(move || app.dialog().file().blocking_pick_folder())
+        .await
+        .map_err(|e| AppError::io("local.pick", e))?;
+    path.map(|p| {
+        p.into_path()
+            .map(|p| p.to_string_lossy().replace(char::from(92), "/"))
+            .map_err(|e| AppError::io("local.pick", e))
+    })
+    .transpose()
 }

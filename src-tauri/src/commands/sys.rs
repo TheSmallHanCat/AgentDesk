@@ -82,9 +82,19 @@ pub fn sys_hide(app: tauri::AppHandle) -> AppResult<()> {
 pub async fn sys_exit(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> AppResult<()> {
     state.transfers.shutdown().await?;
     for connection in state.db.connections()? {
+        let owner = crate::models::Target {
+            device_local: false,
+            connection_id: connection.id.clone(),
+            project_id: None,
+            session_id: None,
+            request_seq: 0,
+        };
+        state.local_channels.close(&state.ssh, &owner).await;
+        state.local_terminals.close_connection(&connection.id).await;
         state.hosts.disconnect(&connection.id).await;
         state.terminals.close_connection(&connection.id).await;
         let target = crate::models::Target {
+            device_local: false,
             connection_id: connection.id,
             project_id: None,
             session_id: None,

@@ -1,4 +1,5 @@
 pub mod conn;
+pub mod device;
 pub mod env;
 pub mod file;
 pub mod project;

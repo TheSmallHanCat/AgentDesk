@@ -7,6 +7,21 @@ use crate::{
 use serde_json::{json, Value};
 use std::{sync::Arc, time::Duration};
 
+enum HostStreamEvent {
+    Event(Value),
+    Resync,
+    Disconnected,
+}
+async fn next_host_event(
+    receiver: &mut tokio::sync::broadcast::Receiver<Value>,
+) -> HostStreamEvent {
+    match receiver.recv().await {
+        Ok(event) => HostStreamEvent::Event(event),
+        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => HostStreamEvent::Resync,
+        Err(tokio::sync::broadcast::error::RecvError::Closed) => HostStreamEvent::Disconnected,
+    }
+}
+
 pub async fn project_client(state: &AppState, target: &Target) -> AppResult<Arc<HostClient>> {
     state.ssh.validate_target(target)?;
     let project_id = target
@@ -15,7 +30,7 @@ pub async fn project_client(state: &AppState, target: &Target) -> AppResult<Arc<
         .ok_or_else(|| AppError::new("E_TARGET", "session", "A project target is required"))?;
     let project = state.db.project(project_id)?;
     let client = state.hosts.client(&state.ssh, &state.db, target).await?;
-    client.request("project.upsert", json!({"id":project.id,"path":project.path,"name":project.name,"defaultAgent":project.default_agent})).await?;
+    client.request("project.upsert", json!({"id":project.id,"path":project.path,"name":project.name,"defaultAgent":project.default_agent,"kind":if project.device_local {"local"} else {"remote"}})).await?;
     Ok(client)
 }
 fn session_id(target: &Target) -> AppResult<&str> {
@@ -46,10 +61,14 @@ pub fn session_draft_set(
 pub async fn session_list(
     state: tauri::State<'_, AppState>,
     target: Target,
+    archived: Option<bool>,
 ) -> AppResult<Reply<Value>> {
     let client = project_client(&state, &target).await?;
     let sessions = client
-        .request("session.list", json!({"projectId":target.project_id}))
+        .request(
+            "session.list",
+            json!({"projectId":target.project_id,"archived":archived.unwrap_or(false)}),
+        )
         .await?;
     let rows = sessions
         .as_array()
@@ -117,8 +136,22 @@ pub async fn session_delete(
     let deleted = client
         .request("session.delete", json!({"sessionId":session_id(&target)?}))
         .await?;
-    state.db.forget_session(&target)?;
+    if deleted["deleted"] == true {
+        state.db.forget_session(&target)?;
+    }
     Ok(target.reply(deleted))
+}
+#[tauri::command]
+pub async fn session_restore(
+    state: tauri::State<'_, AppState>,
+    target: Target,
+) -> AppResult<Reply<Value>> {
+    let client = project_client(&state, &target).await?;
+    Ok(target.reply(
+        client
+            .request("session.restore", json!({"sessionId":session_id(&target)?}))
+            .await?,
+    ))
 }
 #[tauri::command]
 pub async fn event_blob(
@@ -140,6 +173,9 @@ pub async fn run_send(
     script: Option<Value>,
 ) -> AppResult<Reply<Value>> {
     let client = project_client(&state, &target).await?;
+    if crate::local::fs::local(&state.db, &target)? {
+        state.local_channels.require(&target).await?;
+    }
     let id = client_msg_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let mut params = json!({"sessionId":session_id(&target)?,"text":text,"clientMsgId":id});
     if let Some(script) = script {
@@ -153,13 +189,14 @@ pub async fn run_append(
     target: Target,
     run_id: String,
     text: String,
+    client_msg_id: String,
 ) -> AppResult<Reply<Value>> {
     let client = project_client(&state, &target).await?;
     Ok(target.reply(
         client
             .request(
                 "run.append",
-                json!({"sessionId":session_id(&target)?,"runId":run_id,"text":text}),
+                json!({"sessionId":session_id(&target)?,"runId":run_id,"text":text,"clientMsgId":client_msg_id}),
             )
             .await?,
     ))
@@ -227,11 +264,14 @@ pub async fn session_subscribe(
         let mut last_seq = last_seq;
         let mut client = initial;
         let mut delay = 1;
-        loop {
+        'connection: loop {
             let mut receiver = client.events.subscribe();
             let subscribe = async {
                 client
-                    .request("sync.subscribe", json!({"sessionId":owner.session_id}))
+                    .request(
+                        "sync.subscribe",
+                        json!({"sessionId":owner.session_id,"subscriptionId":subscription_id}),
+                    )
                     .await?;
                 loop {
                     let page = client
@@ -258,6 +298,7 @@ pub async fn session_subscribe(
                 tokio::select! { _ = cancel.cancelled() => break, result = subscribe => result };
             if synced.is_ok() {
                 delay = 1;
+                let mut lagged = false;
                 let mut batch = Vec::new();
                 let mut size = 0;
                 let mut tick = tokio::time::interval(Duration::from_millis(16));
@@ -271,8 +312,8 @@ pub async fn session_subscribe(
                                 size=0;
                             }
                         }
-                        event = receiver.recv() => match event {
-                            Ok(event) => {
+                        event = next_host_event(&mut receiver) => match event {
+                            HostStreamEvent::Event(event) => {
                                 if event["sessionId"].as_str() != owner.session_id.as_deref() { continue; }
                                 let seq = event["seq"].as_u64().unwrap_or(0);
                                 if seq <= last_seq { continue; }
@@ -284,12 +325,16 @@ pub async fn session_subscribe(
                                     size=0;
                                 }
                             }
-                            Err(_) => break,
+                            HostStreamEvent::Resync => { lagged = true; break; }
+                            HostStreamEvent::Disconnected => break,
                         }
                     }
                 }
                 if !batch.is_empty() {
                     let _ = on_events.send(json!({"target":owner,"events":batch}));
+                }
+                if lagged && !cancel.is_cancelled() {
+                    continue 'connection;
                 }
             }
             if cancel.is_cancelled() {
@@ -308,11 +353,41 @@ pub async fn session_subscribe(
                 Err(_) => continue,
             }
         }
+        let _ = client
+            .request(
+                "sync.unsubscribe",
+                json!({"sessionId":owner.session_id,"subscriptionId":subscription_id}),
+            )
+            .await;
         let _ =
             on_events.send(json!({"target":owner,"events":[],"disconnected":true,"closed":true}));
         let _ = pool.unsubscribe(&owner, &subscription_id);
     });
     Ok(target.reply(json!({"subscriptionId":id})))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn broadcast_overflow_requests_replay_and_keeps_the_stream_usable() {
+        let (sender, mut receiver) = tokio::sync::broadcast::channel(1);
+        sender.send(json!({"seq":1})).unwrap();
+        sender.send(json!({"seq":2})).unwrap();
+        assert!(matches!(
+            next_host_event(&mut receiver).await,
+            HostStreamEvent::Resync
+        ));
+        assert!(
+            matches!(next_host_event(&mut receiver).await, HostStreamEvent::Event(event) if event["seq"] == 2)
+        );
+        drop(sender);
+        assert!(matches!(
+            next_host_event(&mut receiver).await,
+            HostStreamEvent::Disconnected
+        ));
+    }
 }
 #[tauri::command]
 pub fn session_unsubscribe(

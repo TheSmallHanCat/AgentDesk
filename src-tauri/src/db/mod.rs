@@ -167,11 +167,13 @@ impl Db {
             ));
         }
         self.validate_target(&Target {
+            device_local: false,
             session_id: None,
             ..target.clone()
         })?;
         self.lock()?.execute("INSERT OR IGNORE INTO host_sessions(session_id,project_id,connection_id) VALUES(?1,?2,?3)", params![id,project,target.connection_id]).map_err(db_error)?;
         self.validate_target(&Target {
+            device_local: false,
             session_id: Some(id.into()),
             ..target.clone()
         })
@@ -252,7 +254,11 @@ impl Db {
     pub fn save_project(&self, project: &Project) -> AppResult<()> {
         if project.id.is_empty()
             || project.name.trim().is_empty()
-            || !project.path.starts_with('/')
+            || !(if project.device_local {
+                std::path::Path::new(&project.path).is_absolute()
+            } else {
+                project.path.starts_with('/')
+            })
             || project.default_agent.is_empty()
             || project.default_agent.len() > 64
             || !project
@@ -302,7 +308,9 @@ impl Db {
         }
         self.connection(&target.connection_id)?;
         if let Some(id) = &target.project_id {
-            if self.project(id)?.connection_id != target.connection_id {
+            if self.project(id)?.connection_id != target.connection_id
+                || (target.device_local && !self.project(id)?.device_local)
+            {
                 return Err(AppError::new(
                     "E_TARGET",
                     "target",
@@ -380,6 +388,7 @@ mod tests {
             db.save_connection(&connection(id)).unwrap();
         }
         let p = Project {
+            device_local: false,
             id: "p".into(),
             connection_id: "a".into(),
             name: "P".into(),
@@ -394,6 +403,7 @@ mod tests {
         };
         db.save_project(&p).unwrap();
         let t = Target {
+            device_local: false,
             connection_id: "b".into(),
             project_id: Some("p".into()),
             session_id: None,

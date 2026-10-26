@@ -11,9 +11,11 @@ pub struct AppState {
     pub storage: Storage,
     pub ssh: Arc<SshManager>,
     pub diagnostics: Arc<Diagnostics>,
+    pub local_terminals: Arc<crate::local::pty::PtyManager>,
     pub terminals: Arc<crate::ssh::pty::PtyManager>,
     pub transfers: Arc<crate::ssh::transfer::TransferManager>,
     pub hosts: Arc<crate::host::client::HostPool>,
+    pub local_channels: Arc<crate::local::channels::LocalChannels>,
     pub installer: Arc<crate::host::installer::Installer>,
 }
 impl AppState {
@@ -36,9 +38,11 @@ impl AppState {
             ssh,
             diagnostics,
             terminals: Arc::default(),
+            local_terminals: Arc::default(),
             transfers: Arc::default(),
             hosts,
             installer: Arc::default(),
+            local_channels: Arc::default(),
         })
     }
 }

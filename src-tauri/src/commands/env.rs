@@ -106,6 +106,7 @@ fn resources(app: &tauri::AppHandle) -> AppResult<std::path::PathBuf> {
 #[tauri::command]
 pub async fn env_probe(
     state: tauri::State<'_, AppState>,
+    app: tauri::AppHandle,
     target: Target,
 ) -> AppResult<Reply<Value>> {
     let output = state
@@ -143,6 +144,18 @@ pub async fn env_probe(
     }
     let version = values.get("host").copied().filter(|v| *v != "missing");
     let mut result = json!({"layers":layers,"agents":{},"host":{"installed":version.is_some(),"running":false,"version":version}});
+    #[cfg(windows)]
+    {
+        use tauri::Manager;
+        let resources = crate::local::executor::ExecutorResources::discover(
+            &app.path()
+                .resource_dir()
+                .map_err(|e| AppError::io("local.resources", e))?,
+        );
+        for check in resources.probe().await {
+            result["layers"].as_array_mut().unwrap().push(json!({"name":check.name,"status":if check.available {"ready"} else {"missing"},"detail":check.error.map(|reason| format!("{}: {reason}",check.path)).unwrap_or(check.path)}));
+        }
+    }
     if values.get("socket") == Some(&"present") {
         match state.hosts.client(&state.ssh, &state.db, &target).await {
             Ok(client) => {
@@ -150,8 +163,8 @@ pub async fn env_probe(
                 result["agents"] = probe["agents"].clone();
                 result["host"] = probe["host"].clone();
                 let mut additional = Vec::new();
-                for (agent, prefix) in [("claude", "claude"), ("codex", "codex")] {
-                    let caps = &probe["agents"][agent];
+                for (agent, caps) in probe["agents"].as_object().into_iter().flatten() {
+                    let prefix = agent;
                     additional.push(json!({"name":format!("{prefix}Cli"),"status":if caps["installed"]==true {"ready"} else {"missing"},"detail":caps["version"].as_str().unwrap_or("unknown")}));
                     additional.push(json!({"name":format!("{prefix}Login"),"status":if caps["loggedIn"]==true {"ready"} else {"missing"},"detail":caps["reason"].as_str().unwrap_or("ready")}));
                 }
@@ -410,21 +423,26 @@ pub async fn agent_login_start(
     rows: Option<u32>,
     on_output: tauri::ipc::Channel<crate::ssh::pty::TerminalFrame>,
 ) -> AppResult<Reply<Value>> {
-    if !["claude", "codex"].contains(&agent.as_str()) {
-        return Err(AppError::new(
-            "E_CAPABILITY",
-            "agent.login",
-            "This Agent has no login workflow",
-        ));
-    }
+    let client = state.hosts.client(&state.ssh, &state.db, &target).await?;
+    let plan = client
+        .request("agent.login.start", json!({"agent":agent}))
+        .await?;
+    let command = plan["command"]
+        .as_str()
+        .ok_or_else(|| AppError::new("E_PROTOCOL", "agent.login", "Login command missing"))?;
     let home = remote_home(&state.ssh, &target).await?;
     let terminal = state
         .terminals
-        .open(
+        .open_script(
             &state.ssh,
             target.clone(),
-            &home,
-            &format!("login-{agent}"),
+            format!(
+                "cd {} || exit 1
+stty echo || exit 1
+exec {command}
+",
+                crate::ssh::sftp::quote(&home)
+            ),
             cols.unwrap_or(100),
             rows.unwrap_or(30),
             on_output,

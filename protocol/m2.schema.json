@@ -544,6 +544,9 @@
             "remote",
             "local"
           ]
+        },
+        "deviceId": {
+          "type": "string"
         }
       },
       "required": [
@@ -845,15 +848,36 @@
     },
     "DeviceRegisterParams": {
       "type": "object",
-      "additionalProperties": {
-        "$ref": "#/$defs/JsonValue"
-      }
+      "additionalProperties": false,
+      "properties": {}
     },
     "DeviceTunnelReadyParams": {
       "type": "object",
-      "additionalProperties": {
-        "$ref": "#/$defs/JsonValue"
-      }
+      "additionalProperties": false,
+      "properties": {
+        "generation": {
+          "type": "string"
+        },
+        "user": {
+          "type": "string"
+        },
+        "privateKey": {
+          "type": "string"
+        },
+        "hostPublicKey": {
+          "type": "string"
+        },
+        "scriptCommand": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "generation",
+        "user",
+        "privateKey",
+        "hostPublicKey",
+        "scriptCommand"
+      ]
     },
     "DeviceListParams": {
       "type": "object",
@@ -1106,6 +1130,42 @@
       "required": [
         "agent"
       ]
+    },
+    "DeviceRegisterResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "tunnelSocket": {
+          "type": "string"
+        },
+        "generation": {
+          "type": "string"
+        },
+        "hostKeyPinRequired": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "tunnelSocket",
+        "generation",
+        "hostKeyPinRequired"
+      ]
+    },
+    "DeviceTunnelReadyResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "string"
+        },
+        "generation": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "state",
+        "generation"
+      ]
     }
   },
   "x-methods": {
@@ -1259,7 +1319,7 @@
         "$ref": "#/$defs/DeviceRegisterParams"
       },
       "result": {
-        "$ref": "#/$defs/JsonValue"
+        "$ref": "#/$defs/DeviceRegisterResult"
       },
       "x-availability": "M3"
     },
@@ -1268,7 +1328,7 @@
         "$ref": "#/$defs/DeviceTunnelReadyParams"
       },
       "result": {
-        "$ref": "#/$defs/JsonValue"
+        "$ref": "#/$defs/DeviceTunnelReadyResult"
       },
       "x-availability": "M3"
     },

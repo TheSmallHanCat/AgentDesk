@@ -579,6 +579,7 @@ mod tests {
     use super::*;
     fn target(connection: &str) -> Target {
         Target {
+            device_local: false,
             connection_id: connection.into(),
             project_id: None,
             session_id: None,

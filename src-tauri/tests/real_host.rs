@@ -77,6 +77,7 @@ async fn real_host_deploy_stream_approval_stop_reconnect() {
     };
     must(db.save_connection(&c));
     let mut target = Target {
+        device_local: false,
         connection_id: c.id,
         project_id: None,
         session_id: None,
@@ -157,6 +158,7 @@ async fn real_host_deploy_stream_approval_stop_reconnect() {
     }
     println!("PASS: m2_native_unlogged_handshake_models_capabilities");
     let project = Project {
+        device_local: false,
         id: format!("m2_{}", uuid::Uuid::new_v4().simple()),
         connection_id: target.connection_id.clone(),
         name: "M2".into(),

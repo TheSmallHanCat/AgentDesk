@@ -16,6 +16,13 @@ pub fn transfer_download(
     path: String,
     destination: String,
 ) -> AppResult<Reply<serde_json::Value>> {
+    if crate::local::fs::local(&state.db, &target)? {
+        return Err(crate::error::AppError::new(
+            "E_CAPABILITY",
+            "transfer.download",
+            "Local project files are already on this device",
+        ));
+    }
     let id = state
         .transfers
         .download(app, state.ssh.clone(), target.clone(), path, destination)?;

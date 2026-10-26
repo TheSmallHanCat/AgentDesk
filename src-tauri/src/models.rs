@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct Target {
+    #[serde(default)]
+    pub device_local: bool,
     pub connection_id: String,
     pub project_id: Option<String>,
     pub session_id: Option<String>,
@@ -102,6 +104,8 @@ impl ConnectionStatus {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Project {
+    #[serde(default)]
+    pub device_local: bool,
     pub id: String,
     pub connection_id: String,
     pub name: String,
@@ -117,6 +121,7 @@ pub struct Project {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
+    pub local_shell: String,
     pub theme: String,
     pub language: String,
     pub close_action: String,
@@ -146,6 +151,7 @@ pub struct ShortcutSettings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            local_shell: "pwsh".into(),
             theme: "system".into(),
             language: "zh-CN".into(),
             close_action: "ask".into(),

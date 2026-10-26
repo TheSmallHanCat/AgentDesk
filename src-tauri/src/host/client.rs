@@ -231,7 +231,7 @@ impl HostClient {
         }) {
             self.cancel.cancel();
         }
-        if method == "run.send"
+        if matches!(method, "run.send" | "run.append")
             && result
                 .as_ref()
                 .is_err_and(|e| matches!(e.code.as_str(), "E_TIMEOUT" | "E_DISCONNECTED" | "E_IO"))
@@ -260,6 +260,7 @@ pub async fn remote_home(ssh: &SshManager, target: &Target) -> AppResult<String>
 
 pub struct HostPool {
     clients: AsyncMutex<HashMap<String, Arc<HostClient>>>,
+    connect_locks: Mutex<HashMap<String, Arc<AsyncMutex<()>>>>,
     pub subscriptions: Mutex<HashMap<String, (Target, CancellationToken)>>,
     device_id: String,
 }
@@ -267,6 +268,7 @@ impl HostPool {
     pub fn new(device_id: String) -> Self {
         Self {
             clients: AsyncMutex::default(),
+            connect_locks: Mutex::default(),
             subscriptions: Mutex::default(),
             device_id,
         }
@@ -278,6 +280,14 @@ impl HostPool {
         target: &Target,
     ) -> AppResult<Arc<HostClient>> {
         ssh.validate_target(target)?;
+        let connect_lock = self
+            .connect_locks
+            .lock()
+            .map_err(|error| AppError::io("host.connect", error))?
+            .entry(target.connection_id.clone())
+            .or_default()
+            .clone();
+        let _guard = connect_lock.lock().await;
         if let Some(client) = self
             .clients
             .lock()

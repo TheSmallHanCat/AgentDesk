@@ -1,6 +1,8 @@
 use crate::error::{AppError, AppResult};
 use russh::keys::agent::client::{AgentClient, AgentStream};
 
+pub mod executor;
+
 pub async fn agent(kind: &str) -> AppResult<AgentClient<Box<dyn AgentStream + Send + Unpin>>> {
     let result = tokio::time::timeout(std::time::Duration::from_secs(5), async {
         if kind == "pageant" {
@@ -21,3 +23,5 @@ pub async fn agent(kind: &str) -> AppResult<AgentClient<Box<dyn AgentStream + Se
         )),
     }
 }
+
+pub mod paths;

@@ -36,7 +36,10 @@ struct Observation {
     trusted: bool,
     error: Option<AppError>,
 }
+type ReverseEntries = Arc<Mutex<HashMap<(String, String), (u16, CancellationToken)>>>;
 pub struct Client {
+    connection_id: String,
+    reverse: ReverseEntries,
     known: Arc<KnownHosts>,
     host: String,
     port: u16,
@@ -44,6 +47,39 @@ pub struct Client {
 }
 impl client::Handler for Client {
     type Error = russh::Error;
+    async fn server_channel_open_forwarded_streamlocal(
+        &mut self,
+        channel: Channel<client::Msg>,
+        socket_path: &str,
+        reply: client::ChannelOpenHandle,
+        _session: &mut client::Session,
+    ) -> Result<(), Self::Error> {
+        let destination = self.reverse.lock().ok().and_then(|entries| {
+            entries
+                .get(&(self.connection_id.clone(), socket_path.to_owned()))
+                .cloned()
+        });
+        if let Some((port, cancel)) = destination.filter(|(_, cancel)| !cancel.is_cancelled()) {
+            match tokio::net::TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, port)).await {
+                Ok(mut socket) => {
+                    reply.accept().await;
+                    tokio::spawn(async move {
+                        let mut stream = channel.into_stream();
+                        tokio::select! { _ = cancel.cancelled() => {}, _ = tokio::io::copy_bidirectional(&mut stream, &mut socket) => {} }
+                    });
+                }
+                Err(_) => {
+                    reply.reject(russh::ChannelOpenFailure::ConnectFailed).await;
+                }
+            }
+        } else {
+            reply
+                .reject(russh::ChannelOpenFailure::AdministrativelyProhibited)
+                .await;
+        }
+        Ok(())
+    }
+
     async fn check_server_key(
         &mut self,
         key: &PublicKeyOrCertificate,
@@ -78,6 +114,7 @@ impl client::Handler for Client {
 }
 type Session = Arc<AsyncMutex<client::Handle<Client>>>;
 pub struct SshManager {
+    reverse: ReverseEntries,
     db: Arc<Db>,
     known: Arc<KnownHosts>,
     diag: Arc<Diagnostics>,
@@ -96,6 +133,7 @@ impl SshManager {
         app: Option<tauri::AppHandle>,
     ) -> Self {
         Self {
+            reverse: Arc::default(),
             db,
             known,
             diag,
@@ -259,6 +297,8 @@ impl SshManager {
         let socket = socket?;
         let observed = Arc::new(Mutex::new(Observation::default()));
         let handler = Client {
+            connection_id: connection.id.clone(),
+            reverse: self.reverse.clone(),
             known: self.known.clone(),
             host: connection.host.clone(),
             port: connection.port,
@@ -393,6 +433,7 @@ impl SshManager {
             if let Ok(mut sessions) = self.sessions.lock() {
                 sessions.remove(&connection.id);
             }
+            self.clear_reverse(&connection.id);
             self.status(ConnectionStatus::new(&connection.id, "reconnecting"));
             if failures == 0 {
                 self.diag
@@ -477,6 +518,7 @@ impl SshManager {
         self.disconnect_locked(&target.connection_id).await
     }
     async fn disconnect_locked(&self, id: &str) -> AppResult<()> {
+        self.clear_reverse(id);
         if let Some(cancel) = self.controls.lock().map_err(Self::lock_error)?.remove(id) {
             cancel.cancel();
         }
@@ -512,6 +554,73 @@ impl SshManager {
             .await
             .map_err(|_| AppError::new("E_TIMEOUT", "channel", "SSH channel open timed out"))?
             .map_err(|e| AppError::io("channel", e))
+    }
+    fn clear_reverse(&self, connection_id: &str) {
+        if let Ok(mut entries) = self.reverse.lock() {
+            entries.retain(|(id, _), (_, cancel)| {
+                if id == connection_id {
+                    cancel.cancel();
+                    false
+                } else {
+                    true
+                }
+            });
+        }
+    }
+    pub async fn reverse_local(
+        &self,
+        target: &Target,
+        path: &str,
+        port: u16,
+        cancel: CancellationToken,
+    ) -> AppResult<()> {
+        self.validate_target(target)?;
+        super::forward::validate_socket(path)?;
+        let session = self
+            .sessions
+            .lock()
+            .map_err(Self::lock_error)?
+            .get(&target.connection_id)
+            .cloned()
+            .ok_or_else(|| {
+                AppError::new(
+                    "E_DISCONNECTED",
+                    "device.tunnel",
+                    "SSH connection unavailable",
+                )
+            })?;
+        self.reverse
+            .lock()
+            .map_err(Self::lock_error)?
+            .insert((target.connection_id.clone(), path.into()), (port, cancel));
+        let result = super::forward::reverse(&*session.lock().await, path).await;
+        if result.is_err() {
+            self.reverse
+                .lock()
+                .map_err(Self::lock_error)?
+                .remove(&(target.connection_id.clone(), path.into()));
+        }
+        result
+    }
+    pub async fn cancel_reverse_local(&self, target: &Target, path: &str) -> AppResult<()> {
+        if let Some((_, cancel)) = self
+            .reverse
+            .lock()
+            .map_err(Self::lock_error)?
+            .remove(&(target.connection_id.clone(), path.into()))
+        {
+            cancel.cancel();
+        }
+        let session = self
+            .sessions
+            .lock()
+            .map_err(Self::lock_error)?
+            .get(&target.connection_id)
+            .cloned();
+        if let Some(session) = session {
+            super::forward::cancel_reverse(&*session.lock().await, path).await?;
+        }
+        Ok(())
     }
     pub async fn open_streamlocal(
         &self,

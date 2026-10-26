@@ -18,3 +18,6 @@ resources/host/*.tar.gz
 resources/host/manifest.json
 resources/host/dependencies.txt
 resources/host/python-downloads.json
+
+resources/windows/*
+!resources/windows/README.md

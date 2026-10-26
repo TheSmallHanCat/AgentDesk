@@ -15,6 +15,10 @@ pub async fn fs_list(
     path: String,
     show_hidden: bool,
 ) -> AppResult<Reply<Vec<FileEntry>>> {
+    if crate::local::fs::local(&state.db, &target)? {
+        return crate::local::fs::list(&state.db, &target, &path, show_hidden)
+            .map(|data| target.reply(data));
+    }
     let s = sftp::session(&state.ssh, &target).await?;
     let result = sftp::list(&s, &path, show_hidden).await;
     sftp::finish(s, result).await.map(|v| target.reply(v))
@@ -25,6 +29,9 @@ pub async fn fs_read(
     target: Target,
     path: String,
 ) -> AppResult<Reply<FileDocument>> {
+    if crate::local::fs::local(&state.db, &target)? {
+        return crate::local::fs::read(&state.db, &target, &path).map(|data| target.reply(data));
+    }
     let s = sftp::session(&state.ssh, &target).await?;
     let result = sftp::read(&s, &path).await;
     sftp::finish(s, result).await.map(|v| target.reply(v))
@@ -35,6 +42,9 @@ pub async fn fs_stat(
     target: Target,
     path: String,
 ) -> AppResult<Reply<FileEntry>> {
+    if crate::local::fs::local(&state.db, &target)? {
+        return crate::local::fs::stat(&state.db, &target, &path).map(|data| target.reply(data));
+    }
     let path = sftp::remote_path(&path)?;
     let s = sftp::session(&state.ssh, &target).await?;
     let result = s
@@ -56,6 +66,10 @@ pub async fn fs_create(
     target: Target,
     path: String,
 ) -> AppResult<Reply<()>> {
+    if crate::local::fs::local(&state.db, &target)? {
+        return crate::local::fs::mutate(&state.db, &target, "create", &path, None)
+            .map(|data| target.reply(data));
+    }
     let path = sftp::remote_path(&path)?;
     let s = sftp::session(&state.ssh, &target).await?;
     let result = async {
@@ -81,6 +95,10 @@ pub async fn fs_mkdir(
     target: Target,
     path: String,
 ) -> AppResult<Reply<()>> {
+    if crate::local::fs::local(&state.db, &target)? {
+        return crate::local::fs::mutate(&state.db, &target, "mkdir", &path, None)
+            .map(|data| target.reply(data));
+    }
     let path = sftp::remote_path(&path)?;
     let s = sftp::session(&state.ssh, &target).await?;
     let result = s.create_dir(path).await.map_err(sftp::error);
@@ -96,6 +114,18 @@ pub async fn fs_write(
     expected_size: u64,
     force: bool,
 ) -> AppResult<Reply<FileDocument>> {
+    if crate::local::fs::local(&state.db, &target)? {
+        return crate::local::fs::save(
+            &state.db,
+            &target,
+            &path,
+            &content,
+            expected_mtime,
+            expected_size,
+            force,
+        )
+        .map(|data| target.reply(data));
+    }
     let path = sftp::remote_path(&path)?;
     let s = sftp::session(&state.ssh, &target).await?;
     let result = save(
@@ -323,6 +353,10 @@ pub async fn fs_rename(
     path: String,
     new_path: String,
 ) -> AppResult<Reply<()>> {
+    if crate::local::fs::local(&state.db, &target)? {
+        return crate::local::fs::mutate(&state.db, &target, "rename", &path, Some(&new_path))
+            .map(|data| target.reply(data));
+    }
     let path = sftp::remote_path(&path)?;
     let new_path = sftp::remote_path(&new_path)?;
     let s = sftp::session(&state.ssh, &target).await?;
@@ -348,6 +382,10 @@ pub async fn fs_delete(
     target: Target,
     path: String,
 ) -> AppResult<Reply<()>> {
+    if crate::local::fs::local(&state.db, &target)? {
+        return crate::local::fs::mutate(&state.db, &target, "delete", &path, None)
+            .map(|data| target.reply(data));
+    }
     let path = sftp::remote_path(&path)?;
     let s = sftp::session(&state.ssh, &target).await?;
     let result = async {
@@ -408,6 +446,7 @@ mod tests {
 
     fn project(id: &str, connection_id: &str, path: &str) -> Project {
         Project {
+            device_local: false,
             id: id.into(),
             connection_id: connection_id.into(),
             name: id.into(),
@@ -438,6 +477,7 @@ mod tests {
         other.archived = true;
         db.save_project(&other).unwrap();
         let target = Target {
+            device_local: false,
             connection_id: "admin".into(),
             project_id: None,
             session_id: None,
@@ -449,6 +489,7 @@ mod tests {
         assert!(protected_path("/work/ordinary", "/root", &roots));
         assert!(!protected_path("/work/ordinary/root/file", "/root", &roots));
         let target = Target {
+            device_local: false,
             connection_id: "ordinary".into(),
             ..target
         };
@@ -478,6 +519,7 @@ mod tests {
         ))
         .unwrap();
         let target = Target {
+            device_local: false,
             connection_id: "selected".into(),
             project_id: None,
             session_id: None,

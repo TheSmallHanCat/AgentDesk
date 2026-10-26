@@ -27,6 +27,7 @@ fn host_session_ownership_and_identity_are_persistent_and_connection_scoped() {
     db.save_connection(&connection).unwrap();
     db.save_connection(&other).unwrap();
     let project = Project {
+        device_local: false,
         id: "project".into(),
         connection_id: "one".into(),
         name: "Project".into(),
@@ -41,6 +42,7 @@ fn host_session_ownership_and_identity_are_persistent_and_connection_scoped() {
     };
     db.save_project(&project).unwrap();
     let target = Target {
+        device_local: false,
         connection_id: "one".into(),
         project_id: Some("project".into()),
         session_id: None,
@@ -49,6 +51,7 @@ fn host_session_ownership_and_identity_are_persistent_and_connection_scoped() {
     db.register_session(&target, &json!({"id":"session","projectId":"project"}))
         .unwrap();
     let session_target = Target {
+        device_local: false,
         session_id: Some("session".into()),
         ..target.clone()
     };
@@ -57,6 +60,7 @@ fn host_session_ownership_and_identity_are_persistent_and_connection_scoped() {
     assert_eq!(db.draft(&session_target).unwrap(), "saved draft");
     assert_eq!(
         db.validate_target(&Target {
+            device_local: false,
             connection_id: "two".into(),
             ..session_target.clone()
         })
@@ -66,6 +70,7 @@ fn host_session_ownership_and_identity_are_persistent_and_connection_scoped() {
     );
     assert_eq!(
         db.validate_target(&Target {
+            device_local: false,
             project_id: None,
             ..session_target
         })
@@ -86,6 +91,7 @@ fn host_session_ownership_and_identity_are_persistent_and_connection_scoped() {
     assert_eq!(reopened.device_id().unwrap(), device);
     reopened
         .validate_target(&Target {
+            device_local: false,
             session_id: Some("session".into()),
             ..target
         })

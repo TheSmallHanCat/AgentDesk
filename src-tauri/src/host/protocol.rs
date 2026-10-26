@@ -134,6 +134,16 @@ pub struct Session {
     pub updated_at: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archived: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_id: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_policy: Option<JsonValue>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -150,6 +160,10 @@ pub struct HostProject {
     pub created_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub archived: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_root: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_id: Option<serde_json::Value>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -288,6 +302,8 @@ pub struct ProjectUpsertParams {
     pub default_agent: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_id: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -301,6 +317,8 @@ pub struct ProjectArchiveParams {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SessionListParams {
     pub project_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archived: Option<bool>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -330,7 +348,10 @@ pub struct SessionDeleteParams {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SessionDeleteResult {
-    pub deleted: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deleted: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archived: Option<bool>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -359,6 +380,7 @@ pub struct RunAppendParams {
     pub session_id: String,
     pub run_id: String,
     pub text: String,
+    pub client_msg_id: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -386,6 +408,8 @@ pub struct ApprovalRespondResult {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SyncSubscribeParams {
     pub session_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subscription_id: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -415,9 +439,19 @@ pub struct EventBlobParams {
     pub limit: Option<u64>,
 }
 
-pub type DeviceRegisterParams = std::collections::BTreeMap<String, JsonValue>;
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DeviceRegisterParams {}
 
-pub type DeviceTunnelReadyParams = std::collections::BTreeMap<String, JsonValue>;
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DeviceTunnelReadyParams {
+    pub generation: String,
+    pub user: String,
+    pub private_key: String,
+    pub host_public_key: String,
+    pub script_command: String,
+}
 
 pub type DeviceListParams = std::collections::BTreeMap<String, JsonValue>;
 
@@ -495,4 +529,43 @@ pub struct HostPrepareShutdownResult {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HostCancelShutdownResult {
     pub cancelled: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SessionRestoreParams {
+    pub session_id: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SyncUnsubscribeParams {
+    pub session_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subscription_id: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DeviceOfflineParams {}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentTerminalStartParams {
+    pub agent: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DeviceRegisterResult {
+    pub tunnel_socket: String,
+    pub generation: String,
+    pub host_key_pin_required: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DeviceTunnelReadyResult {
+    pub state: String,
+    pub generation: String,
 }

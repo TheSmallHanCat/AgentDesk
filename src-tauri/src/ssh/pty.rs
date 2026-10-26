@@ -40,7 +40,8 @@ pub struct PtyManager {
     entries: Mutex<HashMap<String, Terminal>>,
 }
 pub fn same_resource(a: &Target, b: &Target) -> bool {
-    a.connection_id == b.connection_id
+    a.device_local == b.device_local
+        && a.connection_id == b.connection_id
         && a.project_id == b.project_id
         && a.session_id == b.session_id
 }
@@ -58,6 +59,19 @@ impl PtyManager {
     ) -> AppResult<String> {
         let path = remote_path(path)?;
         let command = command(&path, kind)?;
+        self.open_script(ssh, target, command, cols, rows, output)
+            .await
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub async fn open_script(
+        self: &Arc<Self>,
+        ssh: &SshManager,
+        target: Target,
+        command: String,
+        cols: u32,
+        rows: u32,
+        output: tauri::ipc::Channel<TerminalFrame>,
+    ) -> AppResult<String> {
         let mut channel = ssh.open_channel(&target).await?;
         let (cols, rows) = dimensions(cols, rows);
         let mut initial = Vec::with_capacity(32768);
@@ -354,17 +368,7 @@ fn dimensions(cols: u32, rows: u32) -> (u32, u32) {
 }
 pub fn command(path: &str, kind: &str) -> AppResult<String> {
     let action = match kind {
-        "login-claude" => "cli=$(\"$HOME/.agentdesk/host/current/venv/bin/python\" -c 'import pathlib,claude_agent_sdk; print(pathlib.Path(claude_agent_sdk.__file__).parent / \"_bundled\" / \"claude\")') || exit 1\nexec \"$cli\" auth login".to_owned(),
-        "login-codex" => "exec \"$HOME/.agentdesk/host/current/bin/codex\" login --device-auth".to_owned(),
         "shell" => "exec \"$shell\" -l".to_owned(),
-        "claude" | "codex" => {
-            let managed = if kind == "claude" {
-                "if test -x \"$HOME/.agentdesk/host/current/venv/bin/python\"; then\n  cli=$(\"$HOME/.agentdesk/host/current/venv/bin/python\" -c 'import pathlib,claude_agent_sdk; print(pathlib.Path(claude_agent_sdk.__file__).parent / \"_bundled\" / \"claude\")') || exit 1\n  if test -x \"$cli\"; then exec \"$cli\"; fi\nfi"
-            } else {
-                "if test -x \"$HOME/.agentdesk/host/current/bin/codex\"; then exec \"$HOME/.agentdesk/host/current/bin/codex\"; fi"
-            };
-            format!("{managed}\ncase \"${{shell##*/}}\" in\n  csh|tcsh) exec \"$shell\" -ic 'exec {kind}' ;;\n  *) exec \"$shell\" -lic 'exec {kind}' ;;\nesac")
-        }
         _ => return Err(AppError::new("E_INPUT", "pty", "Unknown terminal kind")),
     };
     // Only /bin/sh parses this script. The final interactive program remains the
@@ -381,6 +385,7 @@ mod tests {
     async fn cumulative_ack_recovers_a_full_window_after_lost_acknowledgements() {
         let manager = PtyManager::default();
         let target = Target {
+            device_local: false,
             connection_id: "connection".into(),
             project_id: None,
             session_id: None,
@@ -411,6 +416,7 @@ mod tests {
     async fn frontend_reset_closes_old_terminals_and_releases_all_credit() {
         let manager = PtyManager::default();
         let target = Target {
+            device_local: false,
             connection_id: "connection".into(),
             project_id: None,
             session_id: None,
@@ -451,18 +457,19 @@ mod tests {
         assert!(script.starts_with("cd '/work/a'\\'' b/中文' || exit 1\n"));
         assert!(script.contains("shell=${SHELL:-/bin/sh}"));
         assert!(script.ends_with("exec \"$shell\" -l\n"));
-        let script = command("/work", "codex").unwrap();
-        assert!(script.contains("csh|tcsh) exec \"$shell\" -ic 'exec codex'"));
+        assert!(command("/work", "codex").is_err());
     }
     #[test]
     fn terminal_commands_only_launch_known_programs() {
-        assert!(command("/a' b", "codex").unwrap().contains("-lic"));
+        assert!(command("/a' b", "shell").unwrap().contains("-l"));
+        assert!(command("/a", "codex").is_err());
         assert!(command("/a", "rm -rf /").is_err());
         assert_eq!(dimensions(0, 0), (2, 1));
     }
     #[test]
     fn resource_target_ignores_request_sequence_but_not_project() {
         let t = Target {
+            device_local: false,
             connection_id: "a".into(),
             project_id: Some("p".into()),
             session_id: None,

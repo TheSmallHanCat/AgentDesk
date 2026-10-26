@@ -22,6 +22,7 @@ jobs:
       - uses: astral-sh/setup-uv@v6
       - run: pnpm install --frozen-lockfile
       - run: python scripts/build_host_resources.py
+      - run: python scripts/build_windows_resources.py
       - run: pnpm tauri build
       - name: 计算校验值
         shell: bash

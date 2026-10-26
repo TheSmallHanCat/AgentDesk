@@ -593,6 +593,7 @@ async fn rejected_saved_password_is_retained_until_explicit_removal() {
 }
 fn target(c: &Connection) -> Target {
     Target {
+        device_local: false,
         connection_id: c.id.clone(),
         project_id: None,
         session_id: None,
