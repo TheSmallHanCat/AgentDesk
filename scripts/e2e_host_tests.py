@@ -44,7 +44,7 @@ unset AGENTDESK_NATIVE_CONTRACT AGENTDESK_CODEX_PATH AGENTDESK_CLAUDE_PATH
             _, output = run(client, "tail -n 1 " + shlex.quote(work + "/result.txt") + "\n")
             # Only pytest's numeric summary is retained, never failure payloads.
             import re
-            summary = re.search(r"\d+ passed.*?in [\d.]+s", output)
+            summary = re.search(r"(?:(?:\d+ (?:failed|passed|skipped|xfailed|xpassed|warnings?)),? ?)+in [\d.]+s", output)
             result.update(exitCode=code, summary=summary.group() if summary else "pytest_failed_summary_unavailable")
             print(json.dumps(result))
             return 0 if code == 0 else 1
@@ -52,7 +52,7 @@ unset AGENTDESK_NATIVE_CONTRACT AGENTDESK_CODEX_PATH AGENTDESK_CLAUDE_PATH
         result["failure"] = "bounded_linux_host_tests_failed_details_suppressed"
         return 1
     finally:
-        save_result("task03-host-tests", result)
+        save_result("task04-host-tests", result)
 
 
 if __name__ == "__main__":

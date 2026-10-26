@@ -15,7 +15,7 @@ import uuid
 from e2e_common import PRIVATE, ROOT, configured, save_result
 
 
-def main():
+def main(local=False):
     if not configured():
         return 0
     from playwright.sync_api import sync_playwright
@@ -26,7 +26,7 @@ def main():
     pin = (PRIVATE / "server_key.pub").read_text(encoding="ascii").split()[1]
     expected = "SHA256:" + base64.b64encode(hashlib.sha256(base64.b64decode(pin)).digest()).decode().rstrip("=")
     result = {"nativeWebView": True, "modelCalls": False, "loginAttempted": False, "passed": [], "stage": "launch"}
-    with tempfile.TemporaryDirectory(prefix="m2-native-", dir=PRIVATE) as directory:
+    with tempfile.TemporaryDirectory(prefix="m3-native-" if local else "m2-native-", dir=PRIVATE) as directory:
         environment = os.environ.copy()
         environment["AGENTDESK_DATA_ROOT"] = directory
         environment["WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"] = "--remote-debugging-port=9232"
@@ -97,21 +97,60 @@ def main():
                     invoke("host_start", target=target, fakeAgent=True)
                 result["passed"].append("webview_ssh_host_preflight")
                 project = {"id": "native-m2-" + uuid.uuid4().hex, "connectionId": "native-m2", "name": "M2", "path": "/home/agentdesk-test/agentdesk-e2e/files", "description": "", "defaultAgent": "fake", "defaultModel": "fake-default", "permissionMode": "default", "pinned": False, "archived": False}
+                if local:
+                    local_root = ROOT / ".tmp" / "e2e" / "local-project" / "native-webview"
+                    local_root.mkdir(parents=True, exist_ok=True)
+                    project.update(deviceLocal=True, path=local_root.as_posix(), name="M3 local")
                 project = invoke("project_save", project=project, createDir=False)
                 target["projectId"] = project["id"]
+                if local:
+                    target["deviceLocal"] = True
+                    assert invoke("device_status", target=target)["data"]["enabled"] is False
+                    assert invoke("device_enable", target=target, confirmed=True)["data"]["state"] == "ready"
+                    result["passed"].append("webview_local_executor_reverse_probe")
                 session = invoke("session_create", target=target, agent="fake", model="fake-default", permissionMode="default")["data"]
                 target["sessionId"] = session["id"]
+                if local:
+                    page.evaluate("""async ({projectId, sessionId}) => {
+                      const {useDataStore} = await import('/src/stores/data.ts');
+                      await useDataStore().refresh();
+                      window.location.hash = '#/workbench/' + projectId + '/' + sessionId;
+                    }""", {"projectId": project["id"], "sessionId": session["id"]})
+                    page.wait_for_selector('.conversation-head strong')
                 page.evaluate("t=>window.__m2.owner=t", target)
                 subscription = page.evaluate("async()=>window.__m2.call('session_subscribe',{target:window.__m2.owner,lastSeq:0,onEvents:window.__m2.channel(window.__m2.events)})")
-                invoke("run_send", target=target, text="Process the project", clientMsgId=uuid.uuid4().hex)
+                if local:
+                    script = chr(10).join([
+                        "$targetPath = '" + (local_root / "native-result.txt").as_posix().replace("'", "''") + "'",
+                        "$lines = @(", "  'first'", "  '中文图形会话'", ")",
+                        "[System.IO.File]::WriteAllLines($targetPath, $lines, [System.Text.UTF8Encoding]::new($false))",
+                        "Write-Output '本机工具执行完成'", "exit 7", "",
+                    ])
+                    steps = [{"type":"text","text":"Executing device command"}, {"type":"approval","tool":"device-script","input":{"operation":"execute"}}, {"type":"device","script":script}]
+                    invoke("run_send", target=target, text="Execute device command", clientMsgId=uuid.uuid4().hex, script=steps)
+                else:
+                    invoke("run_send", target=target, text="Process the project", clientMsgId=uuid.uuid4().hex)
                 page.wait_for_function("window.__m2.events.some(b=>b.events.some(e=>e.type==='approval.request'))")
                 approval = page.evaluate("window.__m2.events.flatMap(b=>b.events).find(e=>e.type==='approval.request')")
-                invoke("approval_respond", target=target, approvalId=approval["payload"]["approvalId"], decision={"behavior": "allow"})
+                if local:
+                    result["stage"] = "graphical_approval"
+                    page.get_by_role("button", name="允许", exact=True).click()
+                else:
+                    invoke("approval_respond", target=target, approvalId=approval["payload"]["approvalId"], decision={"behavior": "allow"})
                 page.wait_for_function("window.__m2.events.some(b=>b.events.some(e=>e.type==='run.finished'))")
                 events = page.evaluate("window.__m2.events.flatMap(b=>b.events)")
                 assert any(event["type"] == "item.delta" for event in events)
                 assert any(event["payload"].get("kind") == "tool_call" for event in events)
                 result["passed"].append("webview_channel_stream_tools_approval_completion")
+                if local:
+                    document = invoke("fs_read", target=target, path=(local_root / "native-result.txt").as_posix())["data"]
+                    assert "中文图形会话" in document["content"]
+                    assert any(event["payload"].get("exitCode") == 7 and "本机工具执行完成" in str(event["payload"].get("output", "")) for event in events)
+                    page.wait_for_function("document.querySelector('.conversation')?.textContent.includes('本机工具执行完成')")
+                    result["passed"].append("graphical_approval_and_device_result_rendered")
+                    written = invoke("fs_write", target=target, path=document["path"], content=document["content"]+"saved"+chr(10), expectedMtime=document["mtime"], expectedSize=document["size"], force=False)["data"]
+                    assert written["content"].endswith("saved"+chr(10))
+                    result["passed"].append("webview_fake_device_script_and_local_editor")
                 invoke("session_draft_set", target=target, text="Persistent draft")
                 assert invoke("session_draft_get", target=target)["data"] == "Persistent draft"
                 run = invoke("run_send", target=target, text="Continue", clientMsgId=uuid.uuid4().hex, script=[{"type": "sleep", "seconds": 60}])["data"]
@@ -127,9 +166,12 @@ def main():
                 invoke("conn_disconnect", target=target)
                 assert invoke("conn_connect", target=target)["data"]["state"] == "connected"
                 assert invoke("host_status", target=target)["data"]["host"]["running"] is True
+                if local:
+                    assert invoke("device_status", target=target)["data"]["enabled"] is False
+                    result["passed"].append("webview_local_consent_expires_on_disconnect")
                 invoke("conn_disconnect", target=target)
                 result["passed"].append("webview_drafts_stop_history_disconnect_survival")
-                print("PASS: real WebView IPC, SSH, Host, Channel, stream, tools, approval, SQLite drafts, stop and reconnect")
+                print("PASS: real M3 WebView, project authorization, reverse SSH, graphical approval, device script, local editor and disconnect cleanup" if local else "PASS: real WebView IPC, SSH, Host, Channel, stream, tools, approval, SQLite drafts, stop and reconnect")
                 browser.close()
             return 0
         except Exception as error:
@@ -144,7 +186,7 @@ def main():
                 print(json.dumps(result["errorShape"]))
             except Exception:
                 pass
-            print("FAIL: native M2 check at " + result["stage"] + " (" + result["errorType"] + ") " + result.get("errorCode", ""))
+            print("FAIL: native " + ("M3" if local else "M2") + " check at " + result["stage"] + " (" + result["errorType"] + ") " + result.get("errorCode", ""))
             return 1
         finally:
             process.terminate()
@@ -153,7 +195,7 @@ def main():
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait(timeout=5)
-            save_result("task03-native-webview", result)
+            save_result("task04-native-webview" if local else "task03-native-webview", result)
 
 
 if __name__ == "__main__":

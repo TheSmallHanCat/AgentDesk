@@ -85,3 +85,24 @@ AGENTDESK_UI_URL=http://127.0.0.1:1420 python scripts/smoke_workbench.py
 ```
 
 前端 fixture 只存在 tests/，不会进入产品构建。M2 结果、服务器改动与回滚见 `docs/progress/03-M2.md`；用户本人登录见 `docs/USER-LOGIN.md`。验收后受管 Host 是有意保留的部署，不属于残留实验进程；旧版本、staging 和专用测试目录保留用于复核，不自动删除用户数据。
+
+## 任务 04：本机执行通道
+
+```bash
+python scripts/build_windows_resources.py
+python scripts/build_windows_resources.py --check
+cargo test --manifest-path src-tauri/Cargo.toml executor_real_multiline_utf8_exit_and_cleanup -- --ignored --nocapture
+cargo test --manifest-path src-tauri/Cargo.toml conpty_real_shells_frames_target_and_cleanup -- --ignored --nocapture
+python scripts/build_host_resources.py
+cargo test --manifest-path src-tauri/Cargo.toml --test real_device -- --ignored --nocapture --test-threads=1
+python scripts/e2e_host_tests.py
+python scripts/smoke_m3_native.py
+```
+
+`real_device` 使用生产 Installer、HostClient、反向 streamlocal 和 Windows 执行端，完整执行真实 60 秒离线入口等待与 300 秒宽限期；运行期间不要升级或停止该 Host。缺少测试环境时输出 SKIP，不能将此记作真实验收通过。日志只保留固定 PASS 标记，不输出端点、凭据或私钥。
+
+测试服务器 OpenSSH 7.4 不支持 RemoteCommand。仅对该基线外服务器，可先运行 `python scripts/e2e_build_ssh_client.py`，用 `--status` 查看隔离构建状态；脚本校验官方 Zig、LibreSSL、OpenSSH 归档 SHA256，写入专用用户的 `.agentdesk/acceptance/ssh-client/`，不用 sudo、不改系统工具和登录 shell。构建完成后，给上述 Rust 用例进程提供 `AGENTDESK_E2E_SSH_CLIENT=1`，仅该次 Host 启动和验收命令使用局部 PATH。该前置不能扩大产品支持基线。
+
+`smoke_m3_native.py` 复用任务 03 的真实 WebView 入口：新建隔离本机项目、项目授权、实际通道探测、Fake 工具经 device-script 创建文件、图形审批与结果渲染、本机文件读取/保存、断开后授权失效。它不注入 IPC fixture，不登录、不发模型请求，不截图真实服务器信息。需先启动开发 URL、构建 debug 桌面程序，并保持已部署 Host 运行。
+
+最终结果与兼容 schema 的回滚要求见 `docs/progress/04-fix-M3.md`；真实 Agent 的四组登录后验收仍待用户本人登录。
