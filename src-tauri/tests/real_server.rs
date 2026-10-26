@@ -1020,7 +1020,13 @@ async fn real_blackhole_detection_reconnect_stop_and_no_replay() {
     must(
         context
             .manager
-            .exec(&t, &format!("printf once > {}", sftp::quote(&marker)))
+            .exec(&t, &format!(": > {}", sftp::quote(&marker)))
+            .await,
+    );
+    must(
+        context
+            .manager
+            .exec(&t, &format!("printf once >> {}", sftp::quote(&marker)))
             .await,
     );
     let pty = Arc::new(PtyManager::default());
