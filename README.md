@@ -2,7 +2,7 @@
 
 Windows 优先的 SSH 远程开发工作台，采用 Vue 3、TypeScript、Naive UI 与 Tauri 2。项目采用 **AGPL-3.0-only** 许可证。
 
-当前交付范围为 M0 工程骨架与 M1 SSH 工作台：连接、远端项目、终端、文件浏览、文本编辑和下载。图形 Agent 对话、Agent Host 业务和本机执行通道将在 M2/M3 实现。环境页和聊天区明确显示阶段说明，不自动安装任何远端软件。
+当前实现包括 M0/M1 SSH 工作台与 M2 远端 Agent Host、图形会话、环境预检及安装。Fake Agent 可在未登录时验证完整流程；Claude/Codex 通过官方 CLI 工作，真实模型验收需要用户本人先登录。本机项目与执行通道留到 M3。远端安装在环境页展示完整方案，经用户确认后执行。
 
 ## 开发
 
@@ -30,14 +30,14 @@ uv run --project host python -m pytest host/tests -q
 pnpm protocol:check
 ```
 
-协议类型变更后运行 `pnpm protocol:generate`。`protocol/hello.schema.json` 是 hello 握手及样例类型的唯一来源，生成 TS、Rust serde 与 Python dataclass。生成器严格支持当前使用的 Schema 子集；类型本身不替代运行时 Schema 校验。Host 此阶段仅有空包边界与协议样例，没有运行服务或官方 CLI 适配器。
+协议类型变更后运行 `pnpm protocol:generate`。`protocol/*.schema.json` 是握手、M2 方法和事件类型的唯一来源，生成 TS、Rust serde 与 Python dataclass。生成器严格支持当前使用的 Schema 子集；类型本身不替代运行时校验。Host 使用 Python 3.12、Unix socket、NDJSON JSON-RPC、SQLite、官方 SDK/app-server 适配器。
 
 ## 使用
 
 1. 在连接页添加地址、端口、用户与认证方式。地址支持 `user@host:port`、`[IPv6]:port`。也可导入 `~/.ssh/config`，不会回写该文件；Include/Match 会显示不支持说明，ProxyJump 只解析。
 2. 首次连接通过可信渠道核对主机指纹。变化的指纹会拒绝连接，不提供跳过校验入口。密码与私钥密码短语默认不保存，选中后写入操作系统凭据库。
 3. 连接后在项目页选择远端绝对目录，可使用路径补全与最近目录。目录不存在时确认创建；收藏、归档和恢复只操作索引。
-4. 工作台可以打开 Shell、Claude Code 或 Codex 原生终端。CLI 必须已经在远端安装并由用户自行登录；每个终端都是独立会话，不共享未来的图形会话上下文。
+4. 环境页先检测服务器，再展示安装计划、实时日志和取消操作。安装前运行 `python scripts/build_host_resources.py` 准备发行资源；Windows 打包 workflow 已纳入该步骤。CLI 不改 PATH 或已有配置，登录见 [用户登录指南](docs/USER-LOGIN.md)。开发时可在计划中显式启用 Fake Agent。图形会话与原生终端均可在工作台打开；原生终端为独立会话。
 5. 右侧文件树支持懒加载、隐藏文件、软链接标识与右键菜单。双击文件进入编辑器；UTF-8 文本上限 2 MiB，支持撤销、搜索替换和常见语言高亮。
 6. 终端与编辑器共用标签，可切换专注视图，最多四分屏；关闭分屏保留标签。关闭终端标签会结束对应 PTY，断线后不会自动重建终端。
 7. 下载通过系统目录选择器确定本机位置；目录远端流式打包，重名自动编号。任务页显示进度、速度、取消及重试。退出前显示未保存文件、终端和传输。
@@ -53,7 +53,7 @@ pnpm protocol:check
 ```text
 src/           Vue 页面、组件、Pinia 状态与本机 IPC
 src-tauri/     Rust SSH、PTY、SFTP、SQLite、系统凭据与桌面生命周期
-host/          Python 3.12 包骨架
+host/          Python 3.12 Host、SQLite、官方适配器与 Fake Agent
 protocol/      JSON Schema、握手样例与三端类型生成
 scripts/       检查与浏览器验证
 docs/          接口约定、问题与进度报告
@@ -61,14 +61,14 @@ docs/          接口约定、问题与进度报告
 
 数据目录优先级：`AGENTDESK_DATA_ROOT` → 开发模式 `.agentdesk-data/` → 便携版可执行文件旁 `agentdesk.portable` 标记对应的 `data/` → 系统配置目录 `AgentDesk/`（Windows 为 `%APPDATA%/AgentDesk/`）。可以使用环境变量指定隔离测试目录，不要把个人路径写进代码。
 
-连接和远端项目索引保存在 `desktop.sqlite`；设置为 `settings.json`；应用独立管理 `known_hosts` 并只读系统的 `~/.ssh/known_hosts`。M1 的远端项目索引先保存在桌面，M2 再设计迁移到 Host。诊断日志有大小上限，仅含连接 ID、阶段、耗时和错误码，不记录凭据、终端输出或项目内容。凭据保存在系统 keyring，自动重连所需的临时凭据只在进程内存中保留，主动断开后释放。
+连接和远端项目索引保存在 `desktop.sqlite`；设置为 `settings.json`；应用独立管理 `known_hosts` 并只读系统的 `~/.ssh/known_hosts`。M1 项目索引保留，M2 按原 id 幂等登记到 Host；会话与事件由 Host 保存，桌面仅存归属映射与草稿。不同连接的索引不自动合并。诊断日志有大小上限，仅含连接 ID、阶段、耗时和错误码，不记录凭据、终端输出或项目内容。凭据保存在系统 keyring，自动重连所需的临时凭据只在进程内存中保留，主动断开后释放。
 
-初始交付见 [任务 01 报告](docs/progress/01-M0-M1.md)，审查修复与真实环境结果见 [任务 02 报告](docs/progress/02-fix-and-e2e.md)。可重复验收入口见 [E2E 说明](scripts/E2E.md)。本地 SSH 测试服务只监听回环地址、每次生成临时主机密钥，不依赖用户账号。
+初始交付见 [任务 01 报告](docs/progress/01-M0-M1.md)，审查修复与真实环境结果见 [任务 02 报告](docs/progress/02-fix-and-e2e.md)。M2 实测与限制见 [任务 03 报告](docs/progress/03-M2.md)。可重复验收入口见 [E2E 说明](scripts/E2E.md)。本地 SSH 测试服务只监听回环地址、每次生成临时主机密钥，不依赖用户账号。
 
 浏览器验证脚本需要额外安装 Playwright 和 Chromium；启动 `pnpm dev --host 127.0.0.1` 后，可运行 `python scripts/smoke_ui.py` 与 `python scripts/smoke_workbench.py`。后者使用测试专属 IPC 数据，不连接外网。构建 Windows debug 程序后，`python scripts/smoke_native.py` 使用隔离数据目录验证真实 WebView 与 IPC；截图写入被忽略的 `test-results/`。日常 `pnpm test` 不需要 Playwright。
 
 ## 账号与发布边界
 
-后续 Agent 能力仅使用用户服务器上未修改的官方 CLI 与官方登录，不收集或复制 Agent 登录令牌，不在桌面直接请求模型服务。当前不包含真实第三方登录、远端部署、生产服务配置或自动更新。
+Agent 能力使用用户服务器上未修改的官方 CLI 与官方登录，不收集或复制登录令牌，不在桌面直接请求模型服务。用户自行在远端 PTY 登录；测试脚本不登录、不发送真实模型请求。当前不包含本机执行通道、生产服务部署或自动更新。
 
 Windows 首发；macOS/Linux 的平台代码已有隔离边界，尚未通过真实设备验收。源码构建通过不等同于已完成安装包、中文输入法、系统缩放或真实 CLI 性能验收。
