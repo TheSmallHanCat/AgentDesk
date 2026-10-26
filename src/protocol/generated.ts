@@ -23,6 +23,7 @@ export interface AgentCapability {
   resourcesAvailable?: boolean;
   sandboxAvailable?: boolean;
   authStatus?: "missing" | "loggedOut" | "loggedIn" | "failed" | "checking";
+  nativeTerminal?: boolean;
 }
 
 export interface Target {

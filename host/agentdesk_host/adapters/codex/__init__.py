@@ -111,6 +111,8 @@ class CodexAdapter:
                 raise
 
     async def start_run(self, session: dict, input: dict, ctx: RunContext) -> RunHandle:
+        if session.get("kind") == "local" and session.get("permissionMode") == "plan":
+            raise AdapterError("E_LOCAL_PLAN_UNSUPPORTED", "codex.permissions", "Plan mode cannot enforce read-only device access")
         caps = session.get("_capabilities") or await self.capabilities()
         if not caps["installed"]:
             raise AdapterError("E_AGENT_NOT_INSTALLED", "codex.preflight", "Codex is unavailable", "Install the CLI and its matching resources")
@@ -129,6 +131,8 @@ class CodexAdapter:
         return RunHandle(ctx.run_id, asyncio.create_task(self._run(session, input, ctx, native)), native)
 
     async def _run(self, session, input, ctx, native):
+        if session.get("kind") == "local" and session.get("permissionMode") == "plan":
+            raise AdapterError("E_LOCAL_PLAN_UNSUPPORTED", "codex.permissions", "Plan mode cannot enforce read-only device access")
         config = ["-c", 'sandbox_mode="read-only"'] if session.get("permissionMode") == "plan" else []
         if session.get("kind") == "local":
             # A-02, policy version 1: no user config edits or privilege fallback.

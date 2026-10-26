@@ -104,6 +104,8 @@ class ClaudeAdapter:
         return await asyncio.to_thread(sdk.get_session_info, session["nativeId"], session.get("path")) is not None
 
     async def start_run(self, session: dict, input: dict, ctx: RunContext) -> RunHandle:
+        if session.get("kind") == "local" and session.get("permissionMode") == "plan":
+            raise AdapterError("E_LOCAL_PLAN_UNSUPPORTED", "claude.permissions", "Plan mode cannot enforce read-only device access")
         caps = session.get("_capabilities") or await self.capabilities()
         if not caps["installed"]:
             raise AdapterError("E_AGENT_NOT_INSTALLED", "claude.preflight", "Claude SDK CLI is unavailable", "Install the Claude SDK and its bundled CLI")
@@ -114,11 +116,13 @@ class ClaudeAdapter:
         mode = session.get("permissionMode", "default")
         if mode not in caps["permissionModes"]:
             raise AdapterError("E_CAPABILITY", "claude.permissions", "Unsupported permission mode", "Select a supported permission mode")
-        native = {"client": None, "stopping": False, "pendingInputs": 1, "inputLock": asyncio.Lock(), "sessionId": session.get("nativeId")}
+        native = {"client": None, "stopping": False, "inputQueue": [], "inputLock": asyncio.Lock(), "sessionId": session.get("nativeId")}
         task = asyncio.create_task(self._run(session, input, ctx, native))
         return RunHandle(ctx.run_id, task, native)
 
     async def _run(self, session: dict, input: dict, ctx: RunContext, native: dict):
+        if session.get("kind") == "local" and session.get("permissionMode") == "plan":
+            raise AdapterError("E_LOCAL_PLAN_UNSUPPORTED", "claude.permissions", "Plan mode cannot enforce read-only device access")
         import claude_agent_sdk as sdk
         from claude_agent_sdk.types import HookMatcher, PermissionResultAllow, PermissionResultDeny
 
@@ -166,7 +170,7 @@ class ClaudeAdapter:
         fallback_blocks: dict[tuple[str, str, str], str] = {}
         message_id = ""
         native["sessionId"] = native_id
-        native.setdefault("pendingInputs", 1)
+        native.setdefault("inputQueue", [])
         native.setdefault("inputLock", asyncio.Lock())
         try:
             async with asyncio.timeout(30):
@@ -267,10 +271,13 @@ class ClaudeAdapter:
                     if message.is_error and not native["stopping"]:
                         raise AdapterError("E_AGENT", "claude.run", "Claude run failed", "Review the native CLI state and retry")
                     async with native["inputLock"]:
-                        native["pendingInputs"] = max(0, native["pendingInputs"] - 1)
-                        if native["pendingInputs"] == 0:
+                        if not native["inputQueue"]:
                             native["acceptingInput"] = False
                             break
+                        # Submit only after the CLI returns to idle. There is
+                        # never more than one outstanding native input, so CLI
+                        # coalescing cannot strand a per-input result counter.
+                        await client.query(native["inputQueue"].pop(0), session_id=native_id)
         finally:
             try:
                 await client.disconnect()
@@ -282,17 +289,12 @@ class ClaudeAdapter:
 
     async def append_input(self, run: RunHandle, input):
         client = run.native.get("client")
-        if client is None or run.native.get("acceptingInput") is False:
+        if client is None or run.task.done() or run.native.get("acceptingInput") is False:
             raise AdapterError("E_SESSION_BUSY", "claude.append", "Run is not ready", "Wait for the run to start")
         async with run.native.setdefault("inputLock", asyncio.Lock()):
-            if run.native.get("acceptingInput") is False:
+            if run.task.done() or run.native.get("acceptingInput") is False:
                 raise AdapterError("E_SESSION_BUSY", "claude.append", "Run has finished receiving input")
-            run.native["pendingInputs"] = run.native.get("pendingInputs", 1) + 1
-            try:
-                await client.query(input["text"] if isinstance(input, dict) else input, session_id=run.native.get("sessionId") or "default")
-            except BaseException:
-                run.native["pendingInputs"] -= 1
-                raise
+            run.native.setdefault("inputQueue", []).append(input["text"] if isinstance(input, dict) else input)
 
     async def stop(self, run: RunHandle):
         run.native["stopping"] = True

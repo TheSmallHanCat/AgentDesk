@@ -58,13 +58,14 @@ def test_device_probe_ownership_keys_reconnect_and_grace(device_home, monkeypatc
         assert repeated['nativeRoot'] == project['nativeRoot']
         session = await service.request(client, 'session.create', {'projectId': 'local', 'agent': 'fake', 'model': 'fake-default', 'permissionMode': 'default'})
         sid = session['id']
-        assert session['path'] == project['nativeRoot'] and session['projectPath'] == r'c:\work\project'
+        assert session['path'] == project['nativeRoot'] and session['projectPath'] == r'C:\Work\Project'
         await service.request(client, 'sync.subscribe', {'sessionId': sid})
         params = {'sessionId': sid, 'clientMsgId': 'before-ready', 'text': 'Inspect', 'script': []}
         with pytest.raises(AdapterError) as error:
             await service.request(client, 'run.send', params)
         assert error.value.code in {'E_TARGET', 'E_DEVICE_NOT_READY'}
         registered = await service.request(client, 'device.register', {})
+        await service.request(client, 'device.project.enable', {'projectId': 'local'})
         root = service.devices.entry(client.device_id)
         key = '-----BEGIN OPENSSH PRIVATE KEY-----\npublic-fixture-one\n'
         ready_params = {'generation': registered['generation'], 'privateKey': key, 'hostPublicKey': 'ssh-ed25519 public-fixture', 'user': 'DesktopUser', 'scriptCommand': 'pwsh fixed-runner'}
@@ -90,6 +91,7 @@ def test_device_probe_ownership_keys_reconnect_and_grace(device_home, monkeypatc
         await finish(service)
         assert service.db.one('SELECT state,stop_reason FROM runs WHERE id=?', (run['runId'],)) == {'state': 'interrupted', 'stop_reason': 'device_grace_expired'}
         registered = await service.request(client, 'device.register', {})
+        await service.request(client, 'device.project.enable', {'projectId': 'local'})
         assert registered['tunnelSocket'] == str(root / 'tunnel.sock')
         await service.request(client, 'device.tunnel.ready', {**ready_params, 'generation': registered['generation'], 'privateKey': key.replace('one', 'two')})
         assert config.read_text() == before_config
@@ -121,12 +123,13 @@ def test_probe_failure_never_marks_device_ready(device_home, monkeypatch):
         devices = DeviceManager(device_home, state, interrupt)
         owner = object()
         registration = await devices.register('one', owner, 'windows')
+        devices.enable_project('one', owner, 'project')
         with pytest.raises(AdapterError) as error:
             await devices.ready('one', owner, {'generation': registration['generation'], 'privateKey': '-----BEGIN OPENSSH PRIVATE KEY-----\nfixture\n', 'hostPublicKey': 'ssh-ed25519 fixture', 'user': 'User', 'scriptCommand': 'pwsh runner'})
         assert error.value.code == 'E_DEVICE_PROBE'
         assert states == ['preparing', 'probing', 'error']
         assert not (devices.entry('one') / 'keys').exists()
-        with pytest.raises(AdapterError): devices.require_ready('one', owner)
+        with pytest.raises(AdapterError): devices.require_ready('one', owner, 'project')
         await devices.close()
     asyncio.run(check())
 
@@ -153,6 +156,7 @@ def test_old_openssh_remotecommand_failure_has_explicit_version_code(device_home
         devices = DeviceManager(device_home, state, state)
         owner = object()
         generation = (await devices.register('one', owner, 'windows'))['generation']
+        devices.enable_project('one', owner, 'project')
         with pytest.raises(AdapterError) as error:
             await devices.ready('one', owner, {'generation': generation, 'privateKey': '-----BEGIN OPENSSH PRIVATE KEY-----\nfixture\n', 'hostPublicKey': 'ssh-ed25519 fixture', 'user': 'User', 'scriptCommand': 'pwsh runner'})
         assert error.value.code == 'E_DEVICE_SSH_VERSION'
@@ -186,11 +190,13 @@ def test_late_probe_cannot_remove_new_connection_keys(device_home, monkeypatch):
         devices = DeviceManager(device_home, state, state)
         old, new = object(), object()
         generation = (await devices.register('one', old, 'windows'))['generation']
+        devices.enable_project('one', old, 'project')
         params = {'privateKey': '-----BEGIN OPENSSH PRIVATE KEY-----\nfixture\n', 'hostPublicKey': 'ssh-ed25519 fixture', 'user': 'User', 'scriptCommand': 'pwsh runner'}
         pending = asyncio.create_task(devices.ready('one', old, {**params, 'generation': generation}))
         await started.wait()
         await devices.offline('one', old)
         new_generation = (await devices.register('one', new, 'windows'))['generation']
+        devices.enable_project('one', new, 'project')
         await devices.ready('one', new, {**params, 'generation': new_generation})
         release.set()
         with pytest.raises(AdapterError) as error: await pending

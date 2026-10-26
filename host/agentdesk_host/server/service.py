@@ -14,7 +14,7 @@ from typing import Any, Awaitable, Callable
 
 from .. import __version__
 from ..adapters.base import AdapterError, AgentAdapter, RunContext, RunHandle
-from ..device.manager import DeviceManager, instructions, project_key
+from ..device.manager import DeviceManager, instructions, project_key, windows_path
 from ..store.database import Database, now
 from .login import LoginManager
 
@@ -126,6 +126,7 @@ class HostService:
             except Exception:
                 result = {"installed": False, "available": False, "loggedIn": False, "authStatus": "failed", "streaming": False, "models": [], "permissionModes": [], "reason": "Agent detection failed"}
             result.setdefault("authStatus", "loggedIn" if result.get("loggedIn") else "loggedOut" if result.get("installed") else "missing")
+            result["nativeTerminal"] = callable(getattr(self.adapters[agent], "terminal_command", None))
             self.capability_cache[agent] = result
             self.capability_expiry[agent] = asyncio.get_running_loop().time() + 600
             return result
@@ -416,12 +417,24 @@ class HostService:
             if params.get("deviceId", client.device_id) != client.device_id:
                 raise fail("E_TARGET", method, "Device identity does not match the control connection")
             return await self.devices.ready(client.device_id, client, params)
+        if method in {"device.project.enable", "device.project.revoke"}:
+            project = self._project(required(params, "projectId"))
+            if project["kind"] != "local" or project["deviceId"] != client.device_id:
+                raise fail("E_TARGET", method, "Local project belongs to another device")
+            key = Path(project["nativeRoot"]).name
+            if method == "device.project.enable":
+                self.devices.enable_project(client.device_id, client, key)
+            else:
+                await self.devices.revoke_project(client.device_id, client, key)
+            return {"enabled": method == "device.project.enable"}
         if method in {"device.tunnel.close", "device.offline"}:
-            await self.devices.offline(client.device_id, client)
+            await self.devices.offline(client.device_id, client, params.get("generation"))
             return {"state": "closed"}
         if method == "device.list":
             return [{**device, "state": self.devices.entries.get(device["id"], {}).get("state", "closed")} for device in self.db.all("SELECT id,name,os,online,last_seen_at AS lastSeenAt FROM devices")]
         if method in {"session.fork", "run.stopTask", "run.setModel", "run.setPermissionMode", "run.setEffort", "run.compact"}:
+            if method == "run.setPermissionMode" and self._session(required(params, "sessionId"))["kind"] == "local" and params.get("permissionMode") == "plan":
+                raise fail("E_LOCAL_PLAN_UNSUPPORTED", method, "Plan mode cannot enforce read-only device access")
             raise fail("E_CAPABILITY", method, "This capability is unavailable", "Use the supported desktop or native CLI workflow")
         raise fail("E_METHOD_NOT_FOUND", "request.dispatch", "Unknown method", "Use a method supported by this Host")
 
@@ -451,7 +464,7 @@ class HostService:
             if device["os"] == "windows":
                 if not ntpath.isabs(raw_path) or not ntpath.splitdrive(raw_path)[0]:
                     raise fail("E_INVALID_PARAMS", "project.upsert", "Local Windows project path must be absolute")
-                path_text = ntpath.normcase(ntpath.normpath(raw_path.replace("/", "\\")))
+                path_text = windows_path(raw_path)
             else:
                 if not os.path.isabs(raw_path):
                     raise fail("E_INVALID_PARAMS", "project.upsert", "Local project path must be absolute")
@@ -470,7 +483,10 @@ class HostService:
         if len(name) > 256:
             raise fail("E_INVALID_PARAMS", "project.upsert", "Project name is too long")
         existing = self.db.one("SELECT path,kind,device_id FROM projects WHERE id=?", (project_id,))
-        if existing and (existing["path"], existing["kind"], existing["device_id"]) != (path_text, kind, device_id):
+        same_path = existing and existing["path"] == path_text
+        if existing and kind == "local" and existing["kind"] == "local":
+            same_path = project_key(device_id, existing["path"], device["os"]) == project_key(device_id, path_text, device["os"])
+        if existing and (not same_path or (existing["kind"], existing["device_id"]) != (kind, device_id)):
             raise fail("E_CONFLICT", "project.upsert", "Project path is immutable", "Register a separate project")
         self.db.execute("INSERT INTO projects(id,kind,device_id,path,native_root,display_name,default_agent,created_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET display_name=excluded.display_name,default_agent=excluded.default_agent", (project_id, kind, device_id, path_text, native_root, name, params.get("defaultAgent"), now()))
         self.db.commit()
@@ -492,6 +508,8 @@ class HostService:
         if not capabilities.get("available", False):
             raise fail("E_CAPABILITY", "session.create", "Agent is unavailable", str(capabilities.get("reason", "Check Environment")))
         mode = required(params, "permissionMode")
+        if project["kind"] == "local" and mode == "plan":
+            raise fail("E_LOCAL_PLAN_UNSUPPORTED", "session.create", "Plan mode is unavailable for local projects", "The SSH execution channel cannot enforce read-only access on the device; use a remote project for plan mode")
         if mode not in capabilities.get("permissionModes", []):
             raise fail("E_CAPABILITY", "session.create", "Unsupported permission mode", "Choose an available mode")
         model = required(params, "model")
@@ -534,6 +552,10 @@ class HostService:
         session = self._session(session_id)
         if session["kind"] == "local" and session["deviceId"] != client.device_id:
             raise fail("E_TARGET", "run.send", "Local project belongs to another device")
+        if session["kind"] == "local":
+            self.devices.require_ready(session["deviceId"], client, Path(session["path"]).name)
+            if session["permissionMode"] == "plan":
+                raise fail("E_LOCAL_PLAN_UNSUPPORTED", "run.send", "Plan mode cannot enforce read-only device access", "Create a local session in an available permission mode")
         existing = self.db.one("SELECT * FROM client_msgs WHERE client_msg_id=?", (client_msg_id,))
         if existing:
             if existing["session_id"] != session_id:
@@ -559,9 +581,8 @@ class HostService:
         if "script" in params and session["agent"] != "fake":
             raise fail("E_INVALID_PARAMS", "run.send", "Scripts are supported only by FakeAdapter")
         if session["kind"] == "local":
-            self.devices.require_ready(session["deviceId"], client)
             device = self.db.one("SELECT os FROM devices WHERE id=?", (session["deviceId"],))
-            config = self.devices.session_config(session_id, session["deviceId"])
+            config = self.devices.session_config(session_id, session["deviceId"], client, Path(session["path"]).name)
             session.update(deviceInstructions=instructions(config, device["os"], session["projectPath"]), deviceRoot=str(self.devices.entry(session["deviceId"])), sessionConfig=str(config))
         run_id = f"run_{uuid.uuid4().hex}"
         self.db.reserve_seq(2)
@@ -607,18 +628,25 @@ class HostService:
         session = self._session(session_id)
         if session["kind"] == "local" and session["deviceId"] != client.device_id:
             raise fail("E_TARGET", "run.append", "Local project belongs to another device")
+        if session["kind"] == "local":
+            self.devices.require_ready(session["deviceId"], client, Path(session["path"]).name)
+            if session["permissionMode"] == "plan":
+                raise fail("E_LOCAL_PLAN_UNSUPPORTED", "run.append", "Plan mode cannot enforce read-only device access")
         previous = self.db.one("SELECT session_id,run_id FROM client_msgs WHERE client_msg_id=?", (message_id,))
         if previous:
             if (previous["session_id"], previous["run_id"]) != (session_id, run_id):
                 raise fail("E_CONFLICT", "run.append", "Message belongs to another run")
             return {"accepted": True, "clientMsgId": message_id}
-        if session["kind"] == "local":
-            self.devices.require_ready(session["deviceId"], client)
         row = self.db.one("SELECT id FROM runs WHERE id=? AND session_id=? AND finished_at IS NULL", (run_id, session_id))
         if not row or run_id not in self.handles:
-            raise fail("E_NOT_FOUND", "run.append", "Active run does not exist")
+            raise fail("E_APPEND_CLOSED", "run.append", "The run has finished receiving input", "Send this message as a new run.send request")
         adapter, handle = self.handles[run_id]
-        # Persist acceptance before delivering input; retries never send it twice.
+        # The adapter atomically accepts input or rejects a finished run. Do not
+        # persist an undelivered message or change the original run on rejection.
+        try:
+            await adapter.append_input(handle, text)
+        except Exception as error:
+            raise fail("E_APPEND_CLOSED", "run.append", "The run can no longer accept this input", "Send this message as a new run.send request") from error
         seq = self.db.next_seq()
         try:
             self.db.execute("INSERT INTO client_msgs VALUES(?,?,?,?)", (message_id, session_id, run_id, now()))
@@ -628,12 +656,6 @@ class HostService:
             self.db.connection.rollback()
             raise
         await self._broadcast(event)
-        try:
-            await adapter.append_input(handle, text)
-        except Exception as error:
-            handle.task.cancel()
-            await self._finish(session_id, run_id, "failed", error)
-            raise
         return {"accepted": True, "clientMsgId": message_id}
 
     async def _watch(self, session_id: str, run_id: str, task: asyncio.Task) -> None:

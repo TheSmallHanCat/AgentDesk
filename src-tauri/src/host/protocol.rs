@@ -44,6 +44,8 @@ pub struct AgentCapability {
     pub sandbox_available: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth_status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_terminal: Option<bool>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

@@ -29,6 +29,7 @@ class AgentCapability:
     resourcesAvailable: bool | None = None
     sandboxAvailable: bool | None = None
     authStatus: Literal['missing', 'loggedOut', 'loggedIn', 'failed', 'checking'] | None = None
+    nativeTerminal: bool | None = None
 
 
 @dataclass(kw_only=True)

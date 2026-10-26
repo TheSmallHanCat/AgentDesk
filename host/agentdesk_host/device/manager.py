@@ -17,8 +17,17 @@ from ..adapters.base import AdapterError
 from ..adapters.native_common import close_process
 
 
+def windows_path(path: str) -> str:
+    path = path.replace("/", "\\")
+    if path.startswith("\\\\?\\UNC\\"):
+        path = "\\\\" + path[8:]
+    elif path.startswith("\\\\?\\"):
+        path = path[4:]
+    return ntpath.normpath(path)
+
+
 def project_key(device_id: str, path: str, device_os: str) -> str:
-    normalized = ntpath.normcase(ntpath.normpath(path.replace("/", "\\"))) if device_os == "windows" else os.path.normpath(path)
+    normalized = ntpath.normcase(windows_path(path)) if device_os == "windows" else os.path.normpath(path)
     return hashlib.sha256((device_id + "\0" + normalized).encode()).hexdigest()
 
 
@@ -56,15 +65,17 @@ class DeviceManager:
         if device_os not in {"windows", "linux", "macos"}:
             raise AdapterError("E_INVALID_PARAMS", "device.register", "Unsupported device OS")
         previous = self.entries.get(device_id)
-        if previous and previous["owner"] is not owner:
-            raise AdapterError("E_DEVICE_BUSY", "device.register", "Device belongs to another active control connection")
+        if previous:
+            # The caller has already authenticated over SSH and hello binds the
+            # device identity. A stale control connection cannot block reconnect.
+            await self.offline(device_id, previous["owner"])
         root = self.entry(device_id)
         root.mkdir(parents=True, exist_ok=True, mode=0o700)
         if root.is_symlink():
             raise AdapterError("E_DEVICE_PATH", "device.register", "Device entry cannot be a symlink")
         os.chmod(root, 0o700)
         self.cleanup(root)
-        self.entries[device_id] = {"owner": owner, "os": device_os, "state": "preparing", "generation": uuid.uuid4().hex}
+        self.entries[device_id] = {"owner": owner, "os": device_os, "state": "preparing", "generation": uuid.uuid4().hex, "projects": set(), "sessions": {}}
         await self.state_changed(device_id, "preparing", None)
         return {"tunnelSocket": str(root / "tunnel.sock"), "hostKeyPinRequired": True, "generation": self.entries[device_id]["generation"]}
 
@@ -76,6 +87,8 @@ class DeviceManager:
 
     async def ready(self, device_id: str, owner: object, params: dict) -> dict:
         entry = self.owned(device_id, owner)
+        if not entry["projects"]:
+            raise AdapterError("E_DEVICE_UNAUTHORIZED", "device.tunnel", "Enable a local project before providing execution credentials")
         if params.get("generation") != entry["generation"]:
             raise AdapterError("E_TARGET", "device.tunnel", "Stale execution channel generation")
         if entry["state"] == "ready":
@@ -106,7 +119,7 @@ class DeviceManager:
                 if b"bad configuration option: remotecommand" in (diagnostic or b"").lower():
                     raise AdapterError("E_DEVICE_SSH_VERSION", "device.probe", "Host OpenSSH does not support RemoteCommand", "Install OpenSSH 7.6 or newer on the Host before enabling local execution")
                 raise AdapterError("E_DEVICE_PROBE", "device.probe", "Device script probe failed", "Inspect the bundled sshd and PowerShell availability")
-            if self.entries.get(device_id) is not entry:
+            if self.entries.get(device_id) is not entry or not entry["projects"]:
                 raise AdapterError("E_TARGET", "device.probe", "Execution channel changed during probing")
         except (OSError, TimeoutError, AdapterError) as error:
             if self.entries.get(device_id) is entry:
@@ -123,22 +136,40 @@ class DeviceManager:
         await self.state_changed(device_id, "ready", None)
         return {"state": "ready", "generation": entry["generation"]}
 
-    def require_ready(self, device_id: str, owner: object) -> None:
-        if self.owned(device_id, owner)["state"] != "ready":
+    def enable_project(self, device_id: str, owner: object, key: str) -> None:
+        self.owned(device_id, owner)["projects"].add(key)
+
+    async def revoke_project(self, device_id: str, owner: object, key: str) -> None:
+        entry = self.owned(device_id, owner)
+        entry["projects"].discard(key)
+        for session_id, project in list(entry["sessions"].items()):
+            if project == key:
+                (self.home / "session-ssh" / (session_id + ".conf")).unlink(missing_ok=True)
+                del entry["sessions"][session_id]
+        if not entry["projects"]:
+            await self.offline(device_id, owner)
+
+    def require_ready(self, device_id: str, owner: object, key: str) -> None:
+        entry = self.owned(device_id, owner)
+        if key not in entry["projects"]:
+            raise AdapterError("E_DEVICE_UNAUTHORIZED", "local.run", "This project is not authorized for local execution")
+        if entry["state"] != "ready":
             raise AdapterError("E_DEVICE_NOT_READY", "run.send", "Device execution channel is not ready")
 
-    def session_config(self, session_id: str, device_id: str) -> Path:
+    def session_config(self, session_id: str, device_id: str, owner: object, key: str) -> Path:
+        self.require_ready(device_id, owner, key)
         if not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", session_id):
             raise AdapterError("E_TARGET", "device.session", "Invalid session identifier")
         root = self.home / "session-ssh"
         root.mkdir(parents=True, exist_ok=True, mode=0o700)
         path = root / (session_id + ".conf")
         private_write(path, 'Include "' + str(self.entry(device_id) / "ssh.conf") + '"\n')
+        self.owned(device_id, owner)["sessions"][session_id] = key
         return path
 
-    async def offline(self, device_id: str, owner: object) -> None:
+    async def offline(self, device_id: str, owner: object, generation: str | None = None) -> None:
         entry = self.entries.get(device_id)
-        if not entry or entry["owner"] is not owner:
+        if not entry or entry["owner"] is not owner or generation is not None and generation != entry["generation"]:
             return
         self.entries.pop(device_id)
         self.cleanup(self.entry(device_id))
