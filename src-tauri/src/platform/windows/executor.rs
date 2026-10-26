@@ -38,6 +38,28 @@ pub fn hidden_command(executable: &Path) -> std::process::Command {
     command
 }
 
+pub fn component_exit_reason(code: u32) -> &'static str {
+    use windows_sys::Win32::Foundation::{
+        STATUS_ACCESS_DISABLED_BY_POLICY_DEFAULT, STATUS_ACCESS_DISABLED_BY_POLICY_OTHER,
+        STATUS_ACCESS_DISABLED_BY_POLICY_PATH, STATUS_ACCESS_DISABLED_BY_POLICY_PUBLISHER,
+        STATUS_DLL_INIT_FAILED, STATUS_DLL_NOT_FOUND, STATUS_INVALID_IMAGE_FORMAT,
+    };
+    match code as i32 {
+        STATUS_DLL_NOT_FOUND => "A required component DLL is missing",
+        STATUS_DLL_INIT_FAILED => "A component DLL failed to initialize",
+        STATUS_INVALID_IMAGE_FORMAT => {
+            "The executable or one of its DLLs has an incompatible format"
+        }
+        STATUS_ACCESS_DISABLED_BY_POLICY_DEFAULT
+        | STATUS_ACCESS_DISABLED_BY_POLICY_OTHER
+        | STATUS_ACCESS_DISABLED_BY_POLICY_PATH
+        | STATUS_ACCESS_DISABLED_BY_POLICY_PUBLISHER => {
+            "Windows application control policy blocked this component"
+        }
+        _ => "The component exited unsuccessfully",
+    }
+}
+
 fn failure(operation: &str, path: &Path) -> AppError {
     AppError::new(
         "E_LOCAL_EXECUTOR",

@@ -1,5 +1,21 @@
 use std::path::{Path, PathBuf};
 
+pub fn validate_local_path(path: &Path) -> crate::error::AppResult<()> {
+    for component in path.components() {
+        if let std::path::Component::Normal(name) = component {
+            let name = name.to_string_lossy();
+            if name.ends_with([' ', '.']) || name.contains(['<', '>', ':', '"', '|', '?', '*']) {
+                return Err(crate::error::AppError::new(
+                    "E_INPUT",
+                    "local.file",
+                    "Windows path contains an ambiguous or invalid component",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 pub fn display_local_path(path: &Path) -> String {
     let value = path.to_string_lossy();
     if let Some(path) = value.strip_prefix(r"\\?\UNC\") {

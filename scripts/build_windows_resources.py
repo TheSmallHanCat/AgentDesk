@@ -21,7 +21,7 @@ ASSETS = (
         "url": "https://github.com/PowerShell/Win32-OpenSSH/releases/download/10.4.0.0p1-Preview/OpenSSH-Win64.zip",
         "sha256": "b67ff8becd203502190ec42ac7787c24c2cd3325ed7700485fe7a1c83d2a7957",
         "prefix": "OpenSSH-Win64",
-        "required": ["sshd.exe", "ssh-keygen.exe", "sftp-server.exe"],
+        "required": ["sshd.exe", "sshd-auth.exe", "sshd-session.exe", "ssh-keygen.exe", "sftp-server.exe", "libcrypto.dll"],
     },
     {
         "name": "powershell",

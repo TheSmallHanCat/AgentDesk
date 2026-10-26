@@ -176,6 +176,19 @@ fn wide_local_projects_cannot_modify_canonical_home_or_system_paths() {
             );
         }
     }
+    let home_alias = format!("{}.", home.display());
+    assert!(fs::checked(&db, &owner, &home_alias, true, false).is_err());
+    let alternate_stream = format!("{}:stream", home.display());
+    assert!(fs::checked(&db, &owner, &alternate_stream, true, false).is_err());
+    let short_system = root.join("PROGRA~1");
+    if short_system.is_dir() {
+        assert_eq!(
+            fs::checked(&db, &owner, &short_system.to_string_lossy(), true, false)
+                .unwrap_err()
+                .code,
+            "E_PROTECTED"
+        );
+    }
     project.id = "missing".into();
     project.path = dir.path().join("missing").to_string_lossy().into();
     db.save_project(&project).unwrap();

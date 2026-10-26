@@ -37,6 +37,7 @@ impl ExecutorResources {
             .iter()
             .find(|path| path.is_dir())
             .unwrap_or(&candidates[0]);
+        let root = PathBuf::from(crate::platform::display_local_path(root));
         Self {
             openssh_directory: root.join("openssh"),
             powershell: root.join("powershell/pwsh.exe"),
@@ -55,6 +56,18 @@ impl ExecutorResources {
                 self.openssh_directory.join("sftp-server.exe"),
             ),
             ("PowerShell 7", self.powershell.clone()),
+            (
+                "OpenSSH session process",
+                self.openssh_directory.join("sshd-session.exe"),
+            ),
+            (
+                "OpenSSH authentication process",
+                self.openssh_directory.join("sshd-auth.exe"),
+            ),
+            (
+                "OpenSSH crypto library",
+                self.openssh_directory.join("libcrypto.dll"),
+            ),
         ]
         .into_iter()
         .map(|(name, path)| {
@@ -381,9 +394,10 @@ impl LocalExecutor {
                     "E_LOCAL_SSHD",
                     "local.executor",
                     format!(
-                        "{} exited ({}), loopback port {}: {}",
+                        "{} exited ({}, {}), loopback port {}: {}",
                         sshd.display(),
                         code,
+                        windows::component_exit_reason(code),
                         self.port,
                         String::from_utf8_lossy(tail).trim()
                     ),
@@ -504,9 +518,10 @@ async fn run_component_bounded(
             "E_LOCAL_COMPONENT",
             "local.executor",
             format!(
-                "{} exited {}: {}",
+                "{} exited {} ({}): {}",
                 path.display(),
                 output.status,
+                windows::component_exit_reason(output.status.code().unwrap_or(-1) as u32),
                 String::from_utf8_lossy(error).trim()
             ),
         ));
@@ -559,7 +574,14 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let openssh_directory = directory.path().join("openssh");
         std::fs::create_dir(&openssh_directory).unwrap();
-        for name in ["sshd.exe", "ssh-keygen.exe", "sftp-server.exe"] {
+        for name in [
+            "sshd.exe",
+            "sshd-auth.exe",
+            "sshd-session.exe",
+            "ssh-keygen.exe",
+            "sftp-server.exe",
+            "libcrypto.dll",
+        ] {
             std::fs::write(openssh_directory.join(name), b"invalid executable").unwrap();
         }
         let powershell = directory.path().join("pwsh.exe");
@@ -583,10 +605,20 @@ mod tests {
     #[tokio::test]
     #[ignore = "Requires python scripts/build_windows_resources.py; starts an isolated loopback SSH server"]
     async fn executor_real_multiline_utf8_exit_and_cleanup() {
+        use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
         use std::os::windows::process::CommandExt;
         use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        use windows_sys::Win32::{
+            Foundation::WAIT_OBJECT_0,
+            System::Threading::{OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE},
+        };
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
-        let resources = ExecutorResources::discover(root);
+        let canonical_resources = root.canonicalize().unwrap();
+        let resources = ExecutorResources::discover(&canonical_resources);
+        assert!(!resources
+            .openssh_directory
+            .to_string_lossy()
+            .starts_with(r"\\?\"));
         assert!(resources
             .probe()
             .await
@@ -671,7 +703,14 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert!(pid.trim().parse::<u32>().is_ok());
+        let pwsh_pid = pid.trim().parse::<u32>().unwrap();
+        let pwsh_handle = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pwsh_pid) };
+        assert!(!pwsh_handle.is_null());
+        let pwsh_handle = unsafe { OwnedHandle::from_raw_handle(pwsh_handle) };
+        let sshd_handle =
+            unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, executor.process_id().unwrap()) };
+        assert!(!sshd_handle.is_null());
+        let sshd_handle = unsafe { OwnedHandle::from_raw_handle(sshd_handle) };
         let port = executor.port();
         executor.stop().await;
         assert!(
@@ -688,6 +727,16 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(!stopped.success());
+        assert_eq!(
+            unsafe { WaitForSingleObject(pwsh_handle.as_raw_handle(), 5000) },
+            WAIT_OBJECT_0,
+            "The owned PowerShell process must terminate"
+        );
+        assert_eq!(
+            unsafe { WaitForSingleObject(sshd_handle.as_raw_handle(), 5000) },
+            WAIT_OBJECT_0,
+            "The owned sshd process must terminate"
+        );
 
         let mut failed = LocalExecutor::start(resources).await.unwrap();
         assert!(failed.is_running());

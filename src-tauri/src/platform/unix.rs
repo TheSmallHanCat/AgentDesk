@@ -29,3 +29,7 @@ pub fn local_system_roots() -> Vec<std::path::PathBuf> {
 pub fn display_local_path(path: &std::path::Path) -> String {
     path.to_string_lossy().into_owned()
 }
+
+pub fn validate_local_path(_path: &std::path::Path) -> crate::error::AppResult<()> {
+    Ok(())
+}

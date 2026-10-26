@@ -11,6 +11,8 @@ pub use windows::agent;
 pub use windows::executor;
 
 #[cfg(unix)]
-pub use unix::{display_local_path, local_system_roots, path_within};
+pub use unix::{display_local_path, local_system_roots, path_within, validate_local_path};
 #[cfg(windows)]
-pub use windows::paths::{display_local_path, local_system_roots, path_within};
+pub use windows::paths::{
+    display_local_path, local_system_roots, path_within, validate_local_path,
+};

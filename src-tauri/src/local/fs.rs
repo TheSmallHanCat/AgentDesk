@@ -72,6 +72,7 @@ pub fn checked(
     }
     let root = normalized(Path::new(&project.path))?;
     let input = Path::new(path);
+    crate::platform::validate_local_path(input)?;
     if !input.is_absolute()
         || input
             .components()
@@ -83,7 +84,7 @@ pub fn checked(
             "Normalized absolute local path required",
         ));
     }
-    let resolved = if follow && input.exists() {
+    let mut resolved = if follow && input.exists() {
         normalized(input)?
     } else {
         normalized(input.parent().ok_or_else(|| {
@@ -95,6 +96,9 @@ pub fn checked(
                 .ok_or_else(|| AppError::new("E_INPUT", "local.file", "File name required"))?,
         )
     };
+    if modifying && fs::symlink_metadata(&resolved).is_ok_and(|meta| !meta.is_symlink()) {
+        resolved = normalized(&resolved)?;
+    }
     if !crate::platform::path_within(&resolved, &root) {
         return Err(AppError::new(
             "E_PROTECTED",
