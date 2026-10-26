@@ -237,8 +237,10 @@ impl LocalExecutor {
             format!("restrict {}\n", public_key.trim()),
         )
         .map_err(|error| AppError::io("local.executor", error))?;
-        let private_key = std::fs::read_to_string(runtime.path().join("identity"))
-            .map_err(|error| AppError::io("local.executor", error))?;
+        let private_key = zeroize::Zeroizing::new(
+            std::fs::read_to_string(runtime.path().join("identity"))
+                .map_err(|error| AppError::io("local.executor", error))?,
+        );
         let host_public_key = std::fs::read_to_string(runtime.path().join("host.pub"))
             .map_err(|error| AppError::io("local.executor", error))?
             .split_whitespace()
@@ -323,7 +325,7 @@ impl LocalExecutor {
             port,
             credentials: ExecutorCredentials {
                 user,
-                private_key,
+                private_key: private_key.to_string(),
                 host_public_key,
                 script_command: script_command(),
             },

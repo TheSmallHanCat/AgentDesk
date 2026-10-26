@@ -94,6 +94,8 @@ export interface Diagnostic {
   success: boolean
   code?: string
   timestamp: number
+  exitCode?: number
+  stderrTail?: string
 }
 export interface Settings {
   localShell: string
