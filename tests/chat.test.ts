@@ -89,3 +89,17 @@ test('active run snapshots restore stop target even when the cursor is already c
   assert.equal(state.state, 'awaiting_background')
   assert.equal(state.items[0].payload.text, 'current')
 })
+
+test('resolved large approvals retain the blob cursor of the original request', () => {
+  const state = timeline()
+  applyEvents(state, [
+    event(10, 'approval.request', { approvalId: 'a', tool: 'Write', blob: true, truncated: true }),
+  ])
+  applyEvents(state, [
+    event(12, 'approval.resolved', { approvalId: 'a', decision: { behavior: 'deny' } }),
+  ])
+  assert.equal(state.items[0].lastSeq, 12)
+  assert.equal(state.items[0].blobSeq, 10)
+  assert.equal(state.items[0].complete, true)
+  assert.equal(state.items[0].payload.blob, true)
+})

@@ -131,7 +131,9 @@ async function blob(item: ChatItem) {
       if (!result.hasMore) break
     } while (true)
     if (props.project.id !== project.id || session.value?.id !== sid) return
-    item.payload = JSON.parse(content)
+    item.payload = { ...item.payload, ...JSON.parse(content) }
+    delete item.payload.blob
+    delete item.payload.truncated
   } catch (error) {
     if (current.value && session.value?.id === sid) current.value.error = errorText(error)
   } finally {
