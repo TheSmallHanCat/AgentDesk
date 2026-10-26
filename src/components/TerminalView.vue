@@ -187,18 +187,14 @@ onMounted(async () => {
   try {
     const reply = unwrap(
       props.tab.target,
-      await call<Reply<{ terminalId: string }>>(
-        props.tab.loginAgent ? 'agent_login_start' : 'term_open',
-        {
-          ...(props.tab.loginAgent ? { agent: props.tab.loginAgent } : {}),
-          target: props.tab.target,
-          path: props.tab.path,
-          kind: props.tab.kind,
-          cols: term.cols,
-          rows: term.rows,
-          onOutput: output,
-        },
-      ),
+      await call<Reply<{ terminalId: string }>>('term_open', {
+        target: props.tab.target,
+        path: props.tab.path,
+        kind: props.tab.kind,
+        cols: term.cols,
+        rows: term.rows,
+        onOutput: output,
+      }),
     )
     resourceId = reply.terminalId
     props.tab.terminalId = reply.terminalId

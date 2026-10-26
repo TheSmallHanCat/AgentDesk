@@ -14,7 +14,6 @@ interface BaseTab {
 export interface TerminalTab extends BaseTab {
   type: 'terminal'
   kind: 'shell' | 'claude' | 'codex'
-  loginAgent?: string
   terminalId?: string
   exited: boolean
 }
@@ -75,21 +74,6 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       path,
       error: '',
       kind,
-      exited: false,
-    })
-    select(id)
-  }
-  function openLoginTerminal(connectionId: string, agent: string) {
-    const id = crypto.randomUUID()
-    tabs.value.push({
-      id,
-      type: 'terminal',
-      target: target(connectionId),
-      title: agent + ' · ' + i18n.global.t('workbench.loginTerminal'),
-      path: '/',
-      error: '',
-      kind: 'shell',
-      loginAgent: agent,
       exited: false,
     })
     select(id)
@@ -171,7 +155,6 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     splitRequested,
     select,
     openTerminal,
-    openLoginTerminal,
     openFile,
     closeTab,
     split,

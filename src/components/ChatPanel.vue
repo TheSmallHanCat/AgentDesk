@@ -12,6 +12,7 @@ import type { Project, Reply } from '../types'
 import type { BlobResult } from '../protocol/generated'
 import MarkdownContent from './MarkdownContent.vue'
 import ApprovalCard from './ApprovalCard.vue'
+import AgentLoginStatus from './AgentLoginStatus.vue'
 const props = defineProps<{ project: Project }>()
 const emit = defineEmits<{ create: [] }>()
 const { t } = useI18n()
@@ -21,6 +22,10 @@ const device = useDeviceStore()
 const canSend = computed(
   () =>
     !chat.selected(props.project)?.archived &&
+    !!chat.agents[props.project.connectionId]?.[chat.selected(props.project)?.agent ?? '']
+      ?.loggedIn &&
+    !!chat.agents[props.project.connectionId]?.[chat.selected(props.project)?.agent ?? '']
+      ?.available &&
     (!props.project.deviceLocal ||
       (device.state(props.project).enabled && device.state(props.project).state === 'ready')),
 )
@@ -191,6 +196,15 @@ const context = computed(() => {
         <div>
           <strong>{{ session.title }}</strong
           ><span class="muted">{{ session.agent }}</span>
+          <AgentLoginStatus
+            :agent="session.agent"
+            :connection-id="project.connectionId"
+            :project-id="project.id"
+            :session-id="session.id"
+            :device-local="project.deviceLocal"
+            :capability="chat.agents[project.connectionId]?.[session.agent]"
+            :disabled="!data.online(project.connectionId)"
+          />
         </div>
         <span class="run-state" aria-live="polite">{{
           t('chat.state.' + (current?.state ?? 'idle'))

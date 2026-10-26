@@ -4,14 +4,15 @@ import { useRoute } from 'vue-router'
 import { Channel } from '@tauri-apps/api/core'
 import { useI18n } from 'vue-i18n'
 import { useDataStore } from '../stores/data'
-import { useWorkspaceStore } from '../stores/workspace'
+import { useLoginStore } from '../stores/login'
+import AgentLoginStatus from '../components/AgentLoginStatus.vue'
 import { call, errorText } from '../utils/api'
 import { target, unwrap, sameTarget } from '../utils/target'
 import type { Reply, Target } from '../types'
 import type { AgentCapability } from '../protocol/generated'
 const { t } = useI18n(),
   data = useDataStore(),
-  workspace = useWorkspaceStore()
+  login = useLoginStore()
 interface Environment {
   layers: { name: string; status: string; detail: string }[]
   agents: Record<string, AgentCapability>
@@ -64,6 +65,7 @@ watch(
 watch(
   connectionId,
   () => {
+    void login.close()
     environment.value = undefined
     plan.value = undefined
     error.value = ''
@@ -79,7 +81,10 @@ async function probe() {
   error.value = ''
   try {
     const result = unwrap(owner, await call<Reply<Environment>>('env_probe', { target: owner }))
-    if (request === revision) environment.value = result
+    if (request === revision) {
+      environment.value = result
+      login.setCapabilities(owner.connectionId, result.agents)
+    }
   } catch (value) {
     if (request === revision) error.value = errorText(value)
   } finally {
@@ -174,9 +179,6 @@ async function hostAction(command: 'host_start' | 'host_stop' | 'host_rollback')
   } finally {
     if (request === revision) busy.value = false
   }
-}
-function login(agent: string) {
-  workspace.openLoginTerminal(connectionId.value, agent)
 }
 </script>
 <template>
@@ -277,28 +279,23 @@ function login(agent: string) {
       </div>
       <section v-if="environment" class="agents-panel">
         <h2>{{ t('environment.agents') }}</h2>
-        <article v-for="(caps, id) in environment.agents" :key="id" class="agent-row">
+        <article
+          v-for="(caps, id) in login.agents[connectionId] ?? environment.agents"
+          :key="id"
+          :data-agent="id"
+          class="agent-row"
+        >
           <div>
             <strong>{{ id }}</strong>
-            <p class="muted">
-              {{ caps.version ?? '—' }} ·
-              {{
-                caps.loggedIn
-                  ? t('chat.agentReady')
-                  : caps.installed
-                    ? t('chat.agentLoginRequired')
-                    : t('chat.agentMissing')
-              }}
-            </p>
-            <small v-if="caps.accountType">{{ caps.accountType }} · </small
-            ><small v-if="caps.reason">{{ caps.reason }}</small>
+            <p class="muted">{{ caps.version ?? '—' }}</p>
+            <small v-if="caps.reason">{{ caps.reason }}</small>
           </div>
-          <n-button
-            v-if="id !== 'fake'"
-            :disabled="!caps.installed || running"
-            @click="login(String(id))"
-            >{{ t('environment.login') }}</n-button
-          >
+          <AgentLoginStatus
+            :agent="String(id)"
+            :connection-id="connectionId"
+            :capability="caps"
+            :disabled="running || !environment.host.running"
+          />
         </article>
         <p class="muted">{{ t('environment.loginHelp') }}</p>
       </section>

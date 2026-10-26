@@ -3,6 +3,8 @@ import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useDeviceStore } from '../stores/device'
 import { useChatStore } from '../stores/chat'
+import { agentAuthStatus } from '../stores/login'
+import AgentLoginStatus from './AgentLoginStatus.vue'
 import { errorText } from '../utils/api'
 import type { Project } from '../types'
 const props = defineProps<{ project?: Project }>()
@@ -25,14 +27,9 @@ const options = computed(() =>
     label:
       id +
       ' · ' +
-      t(
-        caps.loggedIn && caps.available
-          ? 'chat.agentReady'
-          : caps.installed
-            ? 'chat.agentLoginRequired'
-            : 'chat.agentMissing',
-      ),
-    disabled: !caps.available || !caps.loggedIn,
+      t('login.auth.' + agentAuthStatus(caps)) +
+      (caps.loggedIn && caps.accountType ? ' · ' + caps.accountType : ''),
+    disabled: !caps.installed,
   })),
 )
 const models = computed(() =>
@@ -53,7 +50,9 @@ watch(
     agent.value =
       Object.entries(project ? (chat.agents[project.connectionId] ?? {}) : {}).find(
         ([, caps]) => caps.available && caps.loggedIn,
-      )?.[0] ?? ''
+      )?.[0] ??
+      Object.keys(project ? (chat.agents[project.connectionId] ?? {}) : {})[0] ??
+      ''
     error.value = ''
   },
   { immediate: true },
@@ -90,12 +89,24 @@ async function create() {
         ><n-form-item :label="t('chat.agent')"
           ><n-select v-model:value="agent" :options="options" :placeholder="t('chat.chooseAgent')"
         /></n-form-item>
-        <p v-if="!options.some((value) => !value.disabled)" class="muted">
+        <p
+          v-if="!Object.values(capabilities).some((value) => value.available && value.loggedIn)"
+          class="muted"
+        >
           {{ t('chat.noReadyAgent') }}
           <router-link to="/environment" @click="emit('close')">{{
             t('environment.title')
           }}</router-link>
         </p>
+        <AgentLoginStatus
+          v-if="project && agent"
+          :agent="agent"
+          :connection-id="project.connectionId"
+          :project-id="project.id"
+          :device-local="project.deviceLocal"
+          :capability="selected"
+          :disabled="busy"
+        />
         <p v-if="selected?.reason" class="muted">{{ selected.reason }}</p>
         <n-form-item :label="t('chat.model')"
           ><n-select
@@ -112,6 +123,7 @@ async function create() {
             !agent ||
             !model ||
             !selected?.available ||
+            !selected?.loggedIn ||
             (!!project?.deviceLocal && !device.state(project).enabled)
           "
           @click="create"

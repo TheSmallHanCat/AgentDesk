@@ -6,6 +6,7 @@ import { call, errorText } from '../utils/api.ts'
 import { target, unwrap, sameTarget } from '../utils/target.ts'
 import { timeline, applyEvents, type ChatTimeline, type Delivery } from '../utils/chat.ts'
 import { useSettingsStore } from './settings.ts'
+import { useLoginStore } from './login.ts'
 import type { Project, Reply, Target } from '../types.ts'
 import type {
   Session,
@@ -47,7 +48,7 @@ export const useChatStore = defineStore('chat', () => {
   const sessions = reactive<Record<string, Session[]>>({})
   const active = reactive<Record<string, string>>({})
   const states = reactive<Record<string, SessionState>>({})
-  const agents = reactive<Record<string, Record<string, AgentCapability>>>({})
+  const agents = useLoginStore().agents
   const errors = reactive<Record<string, string>>({})
   const loading = reactive<Record<string, boolean>>({})
   const archived = reactive<Record<string, boolean>>({})
@@ -171,7 +172,7 @@ export const useChatStore = defineStore('chat', () => {
         }),
       )
       if (revisions.get(key) !== revision) return
-      agents[project.connectionId] = environment.agents
+      useLoginStore().setCapabilities(project.connectionId, environment.agents)
       const nextId = rows.some((value) => value.id === active[key]) ? active[key] : rows[0]?.id
       if (nextId) await select(project, nextId)
       else {

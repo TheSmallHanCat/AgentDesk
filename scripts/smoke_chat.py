@@ -79,7 +79,7 @@ def main():
         page.get_by_role('link',name='环境',exact=True).click()
         expect(page.get_by_role('heading',name='分层预检')).to_be_visible()
         expect(page.get_by_text('连接 Beta 指向同一台 Host。',exact=True)).to_be_visible()
-        expect(page.get_by_role('button',name='打开官方登录终端')).to_be_visible()
+        expect(page.get_by_role('button',name='登录',exact=True)).to_be_visible()
         page.get_by_role('button',name='查看安装方案',exact=True).click()
         expect(page.get_by_text('uv pip install --require-hashes -r dependencies.txt',exact=True)).to_be_visible()
         assert page.evaluate("window.__calls.filter(row=>row.command==='env_install_run').length") == 0

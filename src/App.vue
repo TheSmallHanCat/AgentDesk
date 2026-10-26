@@ -5,6 +5,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { darkTheme, zhCN, enUS } from 'naive-ui'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import TitleBar from './components/TitleBar.vue'
+import AgentLoginDialog from './components/AgentLoginDialog.vue'
 import SideNav from './components/SideNav.vue'
 import WorkspaceDock from './components/WorkspaceDock.vue'
 import { useSettingsStore } from './stores/settings'
@@ -12,6 +13,7 @@ import { useDataStore } from './stores/data'
 import { useToastStore } from './stores/toast'
 import { useWorkspaceStore } from './stores/workspace'
 import { useChatStore } from './stores/chat'
+import { useLoginStore } from './stores/login'
 import { applyTheme, themeIsDark, themeOverrides } from './utils/theme'
 import { call, desktop, errorText } from './utils/api'
 import { matchesShortcut } from './utils/shortcuts'
@@ -23,6 +25,7 @@ const data = useDataStore()
 const toast = useToastStore()
 const workspace = useWorkspaceStore()
 const chat = useChatStore()
+const login = useLoginStore()
 const previousConnectionStates = new Map<string, string>()
 watch(
   () =>
@@ -30,8 +33,15 @@ watch(
   (entries) => {
     for (const entry of entries) {
       const previous = previousConnectionStates.get(entry.id)
-      if (['disconnected', 'failed'].includes(entry.state) && previous !== entry.state)
-        void chat.releaseConnection(entry.id)
+      if (entry.state !== previous) {
+        if (['disconnected', 'failed', 'reconnecting'].includes(entry.state)) {
+          login.disconnected(entry.id)
+          if (['disconnected', 'failed'].includes(entry.state))
+            void chat.releaseConnection(entry.id)
+        } else if (entry.state === 'connected') {
+          void login.refresh(entry.id).catch(() => {})
+        }
+      }
       previousConnectionStates.set(entry.id, entry.state)
     }
   },
@@ -39,6 +49,11 @@ watch(
 )
 const router = useRouter()
 const route = useRoute()
+watch(
+  () => route.fullPath,
+  () => void login.close(),
+  { flush: 'sync' },
+)
 const startupError = ref('')
 const closeModal = ref(false)
 const closing = ref(false)
@@ -261,6 +276,7 @@ onUnmounted(() => {
       <div v-if="toast.text" class="toast">
         <n-alert :type="toast.kind" closable @close="toast.text = ''">{{ toast.text }}</n-alert>
       </div>
+      <AgentLoginDialog />
       <n-modal v-model:show="closeModal" :mask-closable="!closing"
         ><n-card style="width: 600px" :title="t('close.title')" closable @close="closeModal = false"
           ><p>{{ t('close.choose') }}</p>
