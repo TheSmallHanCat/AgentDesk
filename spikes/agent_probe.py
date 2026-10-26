@@ -185,8 +185,14 @@ def main() -> None:
         }
         if version.get("exitCode") == 0:
             result["codex"]["rpc"] = codex_rpc(codex)
-            result["codex"]["sandboxHelp"] = command([codex, "sandbox", "linux", "--help"])
-            result["codex"]["sandboxLocalProcess"] = command([codex, "sandbox", "linux", "--", "/bin/sh", "-c", "printf agentdesk-sandbox"])
+            help_result = subprocess.run([codex, "sandbox", "--help"], capture_output=True, timeout=20)
+            # 0.164 uses `sandbox -- command`; older releases had a `linux` subcommand.
+            prefix = [codex, "sandbox"]
+            if re.search(rb"(?m)^\s+linux\s", help_result.stdout):
+                prefix.append("linux")
+            result["codex"]["sandboxHelp"] = command([*prefix, "--help"])
+            result["codex"]["sandboxLocalProcess"] = command([*prefix, "--", "/bin/sh", "-c", "printf agentdesk-sandbox"])
+            result["codex"]["sandboxCommandHasLinuxSubcommand"] = len(prefix) == 3
             result["codex"]["sandboxModelCalls"] = False
     else:
         result["codex"] = {"present": False}
