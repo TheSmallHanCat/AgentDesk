@@ -1,0 +1,1304 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:agentdesk:protocol:1.0:m2",
+  "title": "AgentDesk M2 protocol",
+  "$defs": {
+    "JsonValue": {},
+    "AgentModel": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ]
+    },
+    "HostEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "seq": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sessionId": {
+          "type": "string"
+        },
+        "runId": {
+          "type": "string"
+        },
+        "ts": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        },
+        "itemId": {
+          "type": "string"
+        },
+        "payload": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          }
+        }
+      },
+      "required": [
+        "seq",
+        "sessionId",
+        "ts",
+        "type",
+        "payload"
+      ]
+    },
+    "Session": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "projectId": {
+          "type": "string"
+        },
+        "agent": {
+          "type": "string"
+        },
+        "nativeId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "permissionMode": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "projectId",
+        "agent",
+        "title",
+        "model",
+        "permissionMode",
+        "status",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "HostProject": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "remote",
+            "local"
+          ]
+        },
+        "path": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "defaultAgent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "archived": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "path",
+        "name"
+      ]
+    },
+    "QuestionOption": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "label": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "label"
+      ]
+    },
+    "ApprovalDecision": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "behavior": {
+          "type": "string",
+          "enum": [
+            "allow",
+            "deny"
+          ]
+        },
+        "answers": {
+          "type": "object",
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            ]
+          }
+        }
+      },
+      "required": [
+        "behavior"
+      ]
+    },
+    "RunAccepted": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "runId": {
+          "type": "string"
+        },
+        "clientMsgId": {
+          "type": "string"
+        },
+        "accepted": {
+          "type": "boolean",
+          "const": true
+        }
+      },
+      "required": [
+        "runId",
+        "clientMsgId",
+        "accepted"
+      ]
+    },
+    "AcceptedResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "accepted": {
+          "type": "boolean",
+          "const": true
+        }
+      },
+      "required": [
+        "accepted"
+      ]
+    },
+    "HistoryResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "events": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HostEvent"
+          }
+        },
+        "hasMore": {
+          "type": "boolean"
+        },
+        "nextBeforeSeq": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "events",
+        "hasMore"
+      ]
+    },
+    "SyncResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "events": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HostEvent"
+          }
+        },
+        "snapshots": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HostEvent"
+          }
+        },
+        "currentSeq": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "hasMore": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "events",
+        "snapshots",
+        "currentSeq",
+        "hasMore"
+      ]
+    },
+    "BlobResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "nextOffset": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "hasMore": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "text",
+        "offset",
+        "nextOffset",
+        "total",
+        "hasMore"
+      ]
+    },
+    "RpcErrorData": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "stage": {
+          "type": "string"
+        },
+        "hint": {
+          "type": "string"
+        },
+        "decision": {
+          "$ref": "#/$defs/ApprovalDecision"
+        }
+      },
+      "required": [
+        "code",
+        "stage",
+        "hint"
+      ]
+    },
+    "RpcError": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "type": "integer"
+        },
+        "message": {
+          "type": "string"
+        },
+        "data": {
+          "$ref": "#/$defs/RpcErrorData"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ]
+    },
+    "RpcRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "jsonrpc": {
+          "type": "string",
+          "const": "2.0"
+        },
+        "id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "integer"
+            }
+          ]
+        },
+        "method": {
+          "type": "string"
+        },
+        "params": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          }
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "id",
+        "method",
+        "params"
+      ]
+    },
+    "RpcResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "jsonrpc": {
+          "type": "string",
+          "const": "2.0"
+        },
+        "id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "result": {
+          "$ref": "#/$defs/JsonValue"
+        },
+        "error": {
+          "$ref": "#/$defs/RpcError"
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "id"
+      ]
+    },
+    "EventNotification": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "jsonrpc": {
+          "type": "string",
+          "const": "2.0"
+        },
+        "method": {
+          "type": "string",
+          "const": "event"
+        },
+        "params": {
+          "$ref": "#/$defs/HostEvent"
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "method",
+        "params"
+      ]
+    },
+    "AgentQuestion": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "question": {
+          "type": "string"
+        },
+        "header": {
+          "type": "string"
+        },
+        "options": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/QuestionOption"
+          }
+        },
+        "multiSelect": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "question",
+        "header",
+        "options",
+        "multiSelect"
+      ]
+    },
+    "EnvProbeParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {},
+      "required": []
+    },
+    "AgentStatusParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {},
+      "required": []
+    },
+    "ProjectListParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {},
+      "required": []
+    },
+    "ProjectUpsertParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "defaultAgent": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "const": "remote"
+        }
+      },
+      "required": [
+        "id",
+        "path",
+        "name"
+      ]
+    },
+    "ProjectArchiveParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "projectId": {
+          "type": "string"
+        },
+        "archived": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "projectId",
+        "archived"
+      ]
+    },
+    "SessionListParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "projectId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "projectId"
+      ]
+    },
+    "SessionCreateParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "projectId": {
+          "type": "string"
+        },
+        "agent": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "permissionMode": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "projectId",
+        "agent",
+        "model",
+        "permissionMode"
+      ]
+    },
+    "SessionRenameParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sessionId": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sessionId",
+        "title"
+      ]
+    },
+    "SessionDeleteParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sessionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sessionId"
+      ]
+    },
+    "SessionDeleteResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "deleted": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "deleted"
+      ]
+    },
+    "SessionHistoryParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sessionId": {
+          "type": "string"
+        },
+        "beforeSeq": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "sessionId"
+      ]
+    },
+    "RunSendParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sessionId": {
+          "type": "string"
+        },
+        "clientMsgId": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "script": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/$defs/JsonValue"
+            }
+          }
+        }
+      },
+      "required": [
+        "sessionId",
+        "clientMsgId",
+        "text"
+      ]
+    },
+    "RunAppendParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sessionId": {
+          "type": "string"
+        },
+        "runId": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sessionId",
+        "runId",
+        "text"
+      ]
+    },
+    "RunStopParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sessionId": {
+          "type": "string"
+        },
+        "runId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sessionId",
+        "runId"
+      ]
+    },
+    "ApprovalRespondParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sessionId": {
+          "type": "string"
+        },
+        "approvalId": {
+          "type": "string"
+        },
+        "decision": {
+          "$ref": "#/$defs/ApprovalDecision"
+        }
+      },
+      "required": [
+        "sessionId",
+        "approvalId",
+        "decision"
+      ]
+    },
+    "ApprovalRespondResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "decision": {
+          "$ref": "#/$defs/ApprovalDecision"
+        }
+      },
+      "required": [
+        "decision"
+      ]
+    },
+    "SyncSubscribeParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sessionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sessionId"
+      ]
+    },
+    "SyncSubscribeResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "subscribed": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "subscribed"
+      ]
+    },
+    "SyncSinceParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sessionId": {
+          "type": "string"
+        },
+        "lastSeq": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "lastSeq"
+      ]
+    },
+    "EventBlobParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sessionId": {
+          "type": "string"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "sessionId",
+        "seq"
+      ]
+    },
+    "DeviceRegisterParams": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/JsonValue"
+      }
+    },
+    "DeviceTunnelReadyParams": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/JsonValue"
+      }
+    },
+    "DeviceListParams": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/JsonValue"
+      }
+    },
+    "SessionForkParams": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/JsonValue"
+      }
+    },
+    "RunStoptaskParams": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/JsonValue"
+      }
+    },
+    "RunSetmodelParams": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/JsonValue"
+      }
+    },
+    "RunSetpermissionmodeParams": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/JsonValue"
+      }
+    },
+    "RunSeteffortParams": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/JsonValue"
+      }
+    },
+    "RunCompactParams": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/JsonValue"
+      }
+    },
+    "AgentLoginStartParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "agent": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "agent"
+      ]
+    },
+    "AgentLogoutParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "agent": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "agent"
+      ]
+    },
+    "ProtocolErrorCode": {
+      "type": "string",
+      "enum": [
+        "E_PROTOCOL_VERSION",
+        "E_NOT_LOGGED_IN",
+        "E_AGENT_NOT_INSTALLED",
+        "E_SESSION_BUSY",
+        "E_NATIVE_MISSING",
+        "E_DEVICE_OFFLINE",
+        "E_TUNNEL_NOT_READY",
+        "E_CAPABILITY",
+        "E_ALREADY_RESOLVED",
+        "E_INVALID_PARAMS",
+        "E_NOT_FOUND",
+        "E_CONFLICT",
+        "E_FRAME_TOO_LARGE",
+        "E_INTERNAL",
+        "E_METHOD_NOT_FOUND",
+        "E_AGENT",
+        "E_HOST_DRAINING",
+        "E_AGENT_EXITED",
+        "E_TIMEOUT",
+        "E_CLI_VERSION",
+        "E_SANDBOX",
+        "E_AGENT_PROBE",
+        "E_AGENT_EXECUTABLE"
+      ]
+    },
+    "ApprovalServerRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "jsonrpc": {
+          "type": "string",
+          "const": "2.0"
+        },
+        "id": {
+          "type": "string"
+        },
+        "method": {
+          "type": "string",
+          "const": "approval.request"
+        },
+        "params": {
+          "$ref": "#/$defs/HostEvent"
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "id",
+        "method",
+        "params"
+      ]
+    },
+    "ApprovalServerResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "decision": {
+          "$ref": "#/$defs/ApprovalDecision"
+        }
+      },
+      "required": [
+        "decision"
+      ]
+    },
+    "AgentLoginStartResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "agent": {
+          "type": "string"
+        },
+        "transport": {
+          "type": "string",
+          "const": "pty"
+        },
+        "command": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "agent",
+        "transport",
+        "command"
+      ]
+    },
+    "AgentLogoutResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "loggedOut": {
+          "type": "boolean",
+          "const": true
+        }
+      },
+      "required": [
+        "loggedOut"
+      ]
+    },
+    "HostPrepareShutdownParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {}
+    },
+    "HostCancelShutdownParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {}
+    },
+    "HostPrepareShutdownResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "prepared": {
+          "type": "boolean",
+          "const": true
+        },
+        "leaseSeconds": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "prepared",
+        "leaseSeconds"
+      ]
+    },
+    "HostCancelShutdownResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cancelled": {
+          "type": "boolean",
+          "const": true
+        }
+      },
+      "required": [
+        "cancelled"
+      ]
+    }
+  },
+  "x-methods": {
+    "env.probe": {
+      "params": {
+        "$ref": "#/$defs/EnvProbeParams"
+      },
+      "result": {
+        "$ref": "#/$defs/JsonValue"
+      }
+    },
+    "agent.status": {
+      "params": {
+        "$ref": "#/$defs/AgentStatusParams"
+      },
+      "result": {
+        "type": "object",
+        "additionalProperties": {
+          "$ref": "#/$defs/JsonValue"
+        }
+      }
+    },
+    "project.list": {
+      "params": {
+        "$ref": "#/$defs/ProjectListParams"
+      },
+      "result": {
+        "type": "array",
+        "items": {
+          "$ref": "#/$defs/HostProject"
+        }
+      }
+    },
+    "project.upsert": {
+      "params": {
+        "$ref": "#/$defs/ProjectUpsertParams"
+      },
+      "result": {
+        "$ref": "#/$defs/HostProject"
+      }
+    },
+    "project.archive": {
+      "params": {
+        "$ref": "#/$defs/ProjectArchiveParams"
+      },
+      "result": {
+        "$ref": "#/$defs/HostProject"
+      }
+    },
+    "session.list": {
+      "params": {
+        "$ref": "#/$defs/SessionListParams"
+      },
+      "result": {
+        "type": "array",
+        "items": {
+          "$ref": "#/$defs/Session"
+        }
+      }
+    },
+    "session.create": {
+      "params": {
+        "$ref": "#/$defs/SessionCreateParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Session"
+      }
+    },
+    "session.rename": {
+      "params": {
+        "$ref": "#/$defs/SessionRenameParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Session"
+      }
+    },
+    "session.delete": {
+      "params": {
+        "$ref": "#/$defs/SessionDeleteParams"
+      },
+      "result": {
+        "$ref": "#/$defs/SessionDeleteResult"
+      }
+    },
+    "session.history": {
+      "params": {
+        "$ref": "#/$defs/SessionHistoryParams"
+      },
+      "result": {
+        "$ref": "#/$defs/HistoryResult"
+      }
+    },
+    "run.send": {
+      "params": {
+        "$ref": "#/$defs/RunSendParams"
+      },
+      "result": {
+        "$ref": "#/$defs/RunAccepted"
+      }
+    },
+    "run.append": {
+      "params": {
+        "$ref": "#/$defs/RunAppendParams"
+      },
+      "result": {
+        "$ref": "#/$defs/AcceptedResult"
+      }
+    },
+    "run.stop": {
+      "params": {
+        "$ref": "#/$defs/RunStopParams"
+      },
+      "result": {
+        "$ref": "#/$defs/AcceptedResult"
+      }
+    },
+    "approval.respond": {
+      "params": {
+        "$ref": "#/$defs/ApprovalRespondParams"
+      },
+      "result": {
+        "$ref": "#/$defs/ApprovalRespondResult"
+      }
+    },
+    "sync.subscribe": {
+      "params": {
+        "$ref": "#/$defs/SyncSubscribeParams"
+      },
+      "result": {
+        "$ref": "#/$defs/SyncSubscribeResult"
+      }
+    },
+    "sync.since": {
+      "params": {
+        "$ref": "#/$defs/SyncSinceParams"
+      },
+      "result": {
+        "$ref": "#/$defs/SyncResult"
+      }
+    },
+    "event.blob": {
+      "params": {
+        "$ref": "#/$defs/EventBlobParams"
+      },
+      "result": {
+        "$ref": "#/$defs/BlobResult"
+      }
+    },
+    "device.register": {
+      "params": {
+        "$ref": "#/$defs/DeviceRegisterParams"
+      },
+      "result": {
+        "$ref": "#/$defs/JsonValue"
+      },
+      "x-availability": "M3"
+    },
+    "device.tunnel.ready": {
+      "params": {
+        "$ref": "#/$defs/DeviceTunnelReadyParams"
+      },
+      "result": {
+        "$ref": "#/$defs/JsonValue"
+      },
+      "x-availability": "M3"
+    },
+    "device.list": {
+      "params": {
+        "$ref": "#/$defs/DeviceListParams"
+      },
+      "result": {
+        "$ref": "#/$defs/JsonValue"
+      },
+      "x-availability": "M3"
+    },
+    "session.fork": {
+      "params": {
+        "$ref": "#/$defs/SessionForkParams"
+      },
+      "result": {
+        "$ref": "#/$defs/JsonValue"
+      },
+      "x-availability": "unsupported"
+    },
+    "run.stopTask": {
+      "params": {
+        "$ref": "#/$defs/RunStoptaskParams"
+      },
+      "result": {
+        "$ref": "#/$defs/JsonValue"
+      },
+      "x-availability": "unsupported"
+    },
+    "run.setModel": {
+      "params": {
+        "$ref": "#/$defs/RunSetmodelParams"
+      },
+      "result": {
+        "$ref": "#/$defs/JsonValue"
+      },
+      "x-availability": "unsupported"
+    },
+    "run.setPermissionMode": {
+      "params": {
+        "$ref": "#/$defs/RunSetpermissionmodeParams"
+      },
+      "result": {
+        "$ref": "#/$defs/JsonValue"
+      },
+      "x-availability": "unsupported"
+    },
+    "run.setEffort": {
+      "params": {
+        "$ref": "#/$defs/RunSeteffortParams"
+      },
+      "result": {
+        "$ref": "#/$defs/JsonValue"
+      },
+      "x-availability": "unsupported"
+    },
+    "run.compact": {
+      "params": {
+        "$ref": "#/$defs/RunCompactParams"
+      },
+      "result": {
+        "$ref": "#/$defs/JsonValue"
+      },
+      "x-availability": "unsupported"
+    },
+    "agent.login.start": {
+      "params": {
+        "$ref": "#/$defs/AgentLoginStartParams"
+      },
+      "result": {
+        "$ref": "#/$defs/AgentLoginStartResult"
+      }
+    },
+    "agent.logout": {
+      "params": {
+        "$ref": "#/$defs/AgentLogoutParams"
+      },
+      "result": {
+        "$ref": "#/$defs/AgentLogoutResult"
+      }
+    },
+    "host.prepareShutdown": {
+      "params": {
+        "$ref": "#/$defs/HostPrepareShutdownParams"
+      },
+      "result": {
+        "$ref": "#/$defs/HostPrepareShutdownResult"
+      }
+    },
+    "host.cancelShutdown": {
+      "params": {
+        "$ref": "#/$defs/HostCancelShutdownParams"
+      },
+      "result": {
+        "$ref": "#/$defs/HostCancelShutdownResult"
+      }
+    }
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/RpcRequest"
+    },
+    {
+      "$ref": "#/$defs/RpcResponse"
+    },
+    {
+      "$ref": "#/$defs/EventNotification"
+    }
+  ],
+  "x-server-methods": {
+    "approval.request": {
+      "params": {
+        "$ref": "#/$defs/HostEvent"
+      },
+      "result": {
+        "$ref": "#/$defs/ApprovalServerResult"
+      }
+    }
+  }
+}

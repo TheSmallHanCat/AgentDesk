@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:agentdesk:protocol:1.0:hello",
   "title": "AgentDesk hello handshake",
-  "description": "协议 1.0 的握手样例；此阶段不实现远端 RPC 服务。",
+  "description": "AgentDesk 协议 1.x 握手；主版本不匹配时拒绝连接。",
   "$defs": {
     "ResumeCursor": {
       "type": "object",
@@ -25,6 +25,70 @@
           "type": "boolean"
         },
         "streaming": {
+          "type": "boolean"
+        },
+        "installed": {
+          "type": "boolean"
+        },
+        "loggedIn": {
+          "type": "boolean"
+        },
+        "version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "models": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": {}
+          }
+        },
+        "permissionModes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "resume": {
+          "type": "boolean"
+        },
+        "approvals": {
+          "type": "boolean"
+        },
+        "stop": {
+          "type": "boolean"
+        },
+        "appendInput": {
+          "type": "boolean"
+        },
+        "sdkVersion": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "accountType": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "handshake": {
+          "type": "boolean"
+        },
+        "resourcesAvailable": {
+          "type": "boolean"
+        },
+        "sandboxAvailable": {
           "type": "boolean"
         }
       },
@@ -62,7 +126,7 @@
       "properties": {
         "protocolVersion": {
           "type": "string",
-          "const": "1.0"
+          "pattern": "^1\\.[0-9]+$"
         },
         "client": {
           "type": "string"

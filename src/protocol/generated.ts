@@ -7,6 +7,21 @@ export interface ResumeCursor {
 export interface AgentCapability {
   available: boolean;
   streaming: boolean;
+  installed?: boolean;
+  loggedIn?: boolean;
+  version?: string | null;
+  reason?: string | null;
+  models?: Array<Record<string, unknown>>;
+  permissionModes?: Array<string>;
+  resume?: boolean;
+  approvals?: boolean;
+  stop?: boolean;
+  appendInput?: boolean;
+  sdkVersion?: string | null;
+  accountType?: string | null;
+  handshake?: boolean;
+  resourcesAvailable?: boolean;
+  sandboxAvailable?: boolean;
 }
 
 export interface Target {
@@ -17,7 +32,7 @@ export interface Target {
 }
 
 export interface HelloParams {
-  protocolVersion: "1.0";
+  protocolVersion: string;
   client: string;
   deviceId: string;
   deviceName: string;
@@ -44,4 +59,292 @@ export interface HelloResponse {
   jsonrpc: "2.0";
   id: number;
   result: HelloResult;
+}
+
+export type JsonValue = unknown;
+
+export interface AgentModel {
+  id: string;
+  name?: string;
+}
+
+export interface HostEvent {
+  seq: number;
+  sessionId: string;
+  runId?: string;
+  ts: string;
+  type: string;
+  itemId?: string;
+  payload: Record<string, JsonValue>;
+}
+
+export interface Session {
+  id: string;
+  projectId: string;
+  agent: string;
+  nativeId?: string | null;
+  title: string;
+  model: string;
+  permissionMode: string;
+  status: string;
+  createdAt: string;
+  updatedAt: string;
+  path?: string;
+}
+
+export interface HostProject {
+  id: string;
+  kind?: "remote" | "local";
+  path: string;
+  name: string;
+  defaultAgent?: string | null;
+  createdAt?: string;
+  archived?: boolean;
+}
+
+export interface QuestionOption {
+  label: string;
+  description?: string;
+}
+
+export interface ApprovalDecision {
+  behavior: "allow" | "deny";
+  answers?: Record<string, string | Array<string>>;
+}
+
+export interface RunAccepted {
+  runId: string;
+  clientMsgId: string;
+  accepted: true;
+}
+
+export interface AcceptedResult {
+  accepted: true;
+}
+
+export interface HistoryResult {
+  events: Array<HostEvent>;
+  hasMore: boolean;
+  nextBeforeSeq?: number;
+}
+
+export interface SyncResult {
+  events: Array<HostEvent>;
+  snapshots: Array<HostEvent>;
+  currentSeq: number;
+  hasMore: boolean;
+}
+
+export interface BlobResult {
+  text: string;
+  offset: number;
+  nextOffset: number;
+  total: number;
+  hasMore: boolean;
+}
+
+export interface RpcErrorData {
+  code: string;
+  stage: string;
+  hint: string;
+  decision?: ApprovalDecision;
+}
+
+export interface RpcError {
+  code: number;
+  message: string;
+  data?: RpcErrorData;
+}
+
+export interface RpcRequest {
+  jsonrpc: "2.0";
+  id: string | number;
+  method: string;
+  params: Record<string, JsonValue>;
+}
+
+export interface RpcResponse {
+  jsonrpc: "2.0";
+  id: string | number | null;
+  result?: JsonValue;
+  error?: RpcError;
+}
+
+export interface EventNotification {
+  jsonrpc: "2.0";
+  method: "event";
+  params: HostEvent;
+}
+
+export interface AgentQuestion {
+  question: string;
+  header: string;
+  options: Array<QuestionOption>;
+  multiSelect: boolean;
+}
+
+export interface EnvProbeParams {
+}
+
+export interface AgentStatusParams {
+}
+
+export interface ProjectListParams {
+}
+
+export interface ProjectUpsertParams {
+  id: string;
+  path: string;
+  name: string;
+  defaultAgent?: string;
+  kind?: "remote";
+}
+
+export interface ProjectArchiveParams {
+  projectId: string;
+  archived: boolean;
+}
+
+export interface SessionListParams {
+  projectId: string;
+}
+
+export interface SessionCreateParams {
+  projectId: string;
+  agent: string;
+  model: string;
+  permissionMode: string;
+  title?: string;
+}
+
+export interface SessionRenameParams {
+  sessionId: string;
+  title: string;
+}
+
+export interface SessionDeleteParams {
+  sessionId: string;
+}
+
+export interface SessionDeleteResult {
+  deleted: boolean;
+}
+
+export interface SessionHistoryParams {
+  sessionId: string;
+  beforeSeq?: number;
+  limit?: number;
+}
+
+export interface RunSendParams {
+  sessionId: string;
+  clientMsgId: string;
+  text: string;
+  script?: Array<Record<string, JsonValue>>;
+}
+
+export interface RunAppendParams {
+  sessionId: string;
+  runId: string;
+  text: string;
+}
+
+export interface RunStopParams {
+  sessionId: string;
+  runId: string;
+}
+
+export interface ApprovalRespondParams {
+  sessionId: string;
+  approvalId: string;
+  decision: ApprovalDecision;
+}
+
+export interface ApprovalRespondResult {
+  decision: ApprovalDecision;
+}
+
+export interface SyncSubscribeParams {
+  sessionId: string;
+}
+
+export interface SyncSubscribeResult {
+  subscribed: boolean;
+}
+
+export interface SyncSinceParams {
+  sessionId?: string;
+  lastSeq: number;
+  limit?: number;
+}
+
+export interface EventBlobParams {
+  sessionId: string;
+  seq: number;
+  offset?: number;
+  limit?: number;
+}
+
+export type DeviceRegisterParams = Record<string, JsonValue>;
+
+export type DeviceTunnelReadyParams = Record<string, JsonValue>;
+
+export type DeviceListParams = Record<string, JsonValue>;
+
+export type SessionForkParams = Record<string, JsonValue>;
+
+export type RunStoptaskParams = Record<string, JsonValue>;
+
+export type RunSetmodelParams = Record<string, JsonValue>;
+
+export type RunSetpermissionmodeParams = Record<string, JsonValue>;
+
+export type RunSeteffortParams = Record<string, JsonValue>;
+
+export type RunCompactParams = Record<string, JsonValue>;
+
+export interface AgentLoginStartParams {
+  agent: string;
+}
+
+export interface AgentLogoutParams {
+  agent: string;
+}
+
+export type ProtocolErrorCode = "E_PROTOCOL_VERSION" | "E_NOT_LOGGED_IN" | "E_AGENT_NOT_INSTALLED" | "E_SESSION_BUSY" | "E_NATIVE_MISSING" | "E_DEVICE_OFFLINE" | "E_TUNNEL_NOT_READY" | "E_CAPABILITY" | "E_ALREADY_RESOLVED" | "E_INVALID_PARAMS" | "E_NOT_FOUND" | "E_CONFLICT" | "E_FRAME_TOO_LARGE" | "E_INTERNAL" | "E_METHOD_NOT_FOUND" | "E_AGENT" | "E_HOST_DRAINING" | "E_AGENT_EXITED" | "E_TIMEOUT" | "E_CLI_VERSION" | "E_SANDBOX" | "E_AGENT_PROBE" | "E_AGENT_EXECUTABLE";
+
+export interface ApprovalServerRequest {
+  jsonrpc: "2.0";
+  id: string;
+  method: "approval.request";
+  params: HostEvent;
+}
+
+export interface ApprovalServerResult {
+  decision: ApprovalDecision;
+}
+
+export interface AgentLoginStartResult {
+  agent: string;
+  transport: "pty";
+  command: string;
+}
+
+export interface AgentLogoutResult {
+  loggedOut: true;
+}
+
+export interface HostPrepareShutdownParams {
+}
+
+export interface HostCancelShutdownParams {
+}
+
+export interface HostPrepareShutdownResult {
+  prepared: true;
+  leaseSeconds: number;
+}
+
+export interface HostCancelShutdownResult {
+  cancelled: true;
 }

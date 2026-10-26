@@ -14,7 +14,7 @@ SCHEMA = json.loads((ROOT / "protocol/hello.schema.json").read_text(encoding="ut
 
 
 def test_package_version():
-    assert __version__ == "0.1.0"
+    assert __version__ == "0.2.0"
 
 
 @pytest.mark.parametrize("example", json.loads((ROOT / "protocol/examples/hello.json").read_text(encoding="utf-8")))
@@ -34,9 +34,36 @@ def test_generated_python_model_serializes_to_wire_shape():
     jsonschema.validate(asdict(HelloRequest(jsonrpc="2.0", id=1, method="hello", params=params)), SCHEMA)
 
 
+def test_generated_literals_and_compatible_minor_versions():
+    from typing import get_type_hints, Literal
+    from agentdesk_host.protocol import RunAccepted
+    assert get_type_hints(RunAccepted)["accepted"] == Literal[True]
+    example = json.loads((ROOT / "protocol/examples/hello.json").read_text(encoding="utf-8"))[0]
+    example["params"]["protocolVersion"] = "1.12"
+    jsonschema.validate(example, SCHEMA)
+
+
 def test_generator_rejects_unknown_schema_types():
     spec = importlib.util.spec_from_file_location("generate", ROOT / "protocol/generate.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     with pytest.raises(ValueError):
         module.field_type({"type": "mystery"}, "ts")
+
+
+def test_m2_schema_definitions_and_generated_features():
+    schema = json.loads((ROOT / "protocol/m2.schema.json").read_text(encoding="utf-8"))
+    jsonschema.Draft202012Validator.check_schema(schema)
+    definitions = schema["$defs"]
+    event = {"seq": 42, "sessionId": "session", "ts": "2026-10-26T00:00:00Z", "type": "item.completed", "payload": {"kind": "text", "text": "Hello"}}
+    jsonschema.validate(event, {"$ref": "#/$defs/HostEvent", "$defs": definitions})
+    decision = {"behavior": "allow", "answers": {"color": ["red", "blue"], "name": "chosen"}}
+    jsonschema.validate(decision, {"$ref": "#/$defs/ApprovalDecision", "$defs": definitions})
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate({"behavior": "allow", "answers": {"invalid": 1}}, {"$ref": "#/$defs/ApprovalDecision", "$defs": definitions})
+    spec = importlib.util.spec_from_file_location("generate", ROOT / "protocol/generate.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module.field_type({"type": ["string", "null"]}, "ts") == "string | null"
+    assert module.field_type({"type": "object", "additionalProperties": True}, "python") == "dict[str, Any]"
+    assert module.rust_identifier("type") == "r#type"
