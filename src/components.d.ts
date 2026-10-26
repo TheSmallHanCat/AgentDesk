@@ -11,8 +11,11 @@ export {}
 /* prettier-ignore */
 declare module 'vue' {
   export interface GlobalComponents {
+    ApprovalCard: typeof import('./components/ApprovalCard.vue')['default']
+    ChatPanel: typeof import('./components/ChatPanel.vue')['default']
     CodeEditor: typeof import('./components/CodeEditor.vue')['default']
     FileTree: typeof import('./components/FileTree.vue')['default']
+    MarkdownContent: typeof import('./components/MarkdownContent.vue')['default']
     NAlert: typeof import('naive-ui')['NAlert']
     NAutoComplete: typeof import('naive-ui')['NAutoComplete']
     NButton: typeof import('naive-ui')['NButton']
@@ -28,11 +31,14 @@ declare module 'vue' {
     NModal: typeof import('naive-ui')['NModal']
     NProgress: typeof import('naive-ui')['NProgress']
     NSelect: typeof import('naive-ui')['NSelect']
+    NSpin: typeof import('naive-ui')['NSpin']
     NSwitch: typeof import('naive-ui')['NSwitch']
     NTable: typeof import('naive-ui')['NTable']
+    NTag: typeof import('naive-ui')['NTag']
     NTree: typeof import('naive-ui')['NTree']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
+    SessionCreateDialog: typeof import('./components/SessionCreateDialog.vue')['default']
     SideNav: typeof import('./components/SideNav.vue')['default']
     TerminalView: typeof import('./components/TerminalView.vue')['default']
     TitleBar: typeof import('./components/TitleBar.vue')['default']

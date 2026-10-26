@@ -1,4 +1,5 @@
 """Exercise workbench rendering using an isolated, deterministic IPC fixture."""
+import os
 from pathlib import Path
 from playwright.sync_api import sync_playwright, expect
 
@@ -13,9 +14,9 @@ def main():
         page.on("dialog", lambda dialog: dialog.accept())
         errors = []
         page.on("pageerror", lambda error: errors.append(str(error)))
-        page.goto("http://127.0.0.1:1420/#/workbench/p-a")
+        page.goto(os.environ.get("AGENTDESK_UI_URL", "http://127.0.0.1:1420") + "/#/workbench/p-a")
         page.wait_for_load_state("networkidle")
-        expect(page.get_by_role("heading", name="Agent 功能将在下一阶段提供")).to_be_visible()
+        expect(page.get_by_role("heading", name="开始远端 Agent 会话")).to_be_visible()
         for _ in range(4):
             page.get_by_role("button", name="Shell", exact=True).click()
         expect(page.locator(".tab-strip [role=tab]")).to_have_count(4)

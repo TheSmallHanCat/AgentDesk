@@ -1,4 +1,5 @@
 import { defineStore } from 'pinia'
+import { i18n } from '../i18n/index.ts'
 import { ref, watch } from 'vue'
 import type { Target, FileDocument, Reply, Project } from '../types.ts'
 import { target, unwrap, sameResource, RequestGuard } from '../utils/target.ts'
@@ -13,6 +14,7 @@ interface BaseTab {
 export interface TerminalTab extends BaseTab {
   type: 'terminal'
   kind: 'shell' | 'claude' | 'codex'
+  loginAgent?: string
   terminalId?: string
   exited: boolean
 }
@@ -64,10 +66,30 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       id,
       type: 'terminal',
       target: target(project.connectionId, project.id),
-      title: kind === 'shell' ? 'Shell' : kind === 'claude' ? 'Claude Code' : 'Codex',
+      title:
+        kind === 'shell'
+          ? 'Shell'
+          : (kind === 'claude' ? 'Claude Code' : 'Codex') +
+            ' · ' +
+            i18n.global.t('workbench.independent'),
       path,
       error: '',
       kind,
+      exited: false,
+    })
+    select(id)
+  }
+  function openLoginTerminal(connectionId: string, agent: string) {
+    const id = crypto.randomUUID()
+    tabs.value.push({
+      id,
+      type: 'terminal',
+      target: target(connectionId),
+      title: agent + ' · ' + i18n.global.t('workbench.loginTerminal'),
+      path: '/',
+      error: '',
+      kind: 'shell',
+      loginAgent: agent,
       exited: false,
     })
     select(id)
@@ -149,6 +171,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     splitRequested,
     select,
     openTerminal,
+    openLoginTerminal,
     openFile,
     closeTab,
     split,

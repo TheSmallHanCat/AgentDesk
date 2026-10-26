@@ -12,6 +12,6 @@ export async function call<T>(command: string, args?: Record<string, unknown>): 
 }
 export function errorText(value: unknown): string {
   if (typeof value === 'object' && value && 'message' in value)
-    return `${'code' in value ? String(value.code) + ' · ' : ''}${String(value.message)}`
+    return `${'code' in value ? String(value.code) + ' · ' : ''}${String(value.message)}${'stage' in value ? ' · ' + String(value.stage) : ''}${'details' in value && value.details && typeof value.details === 'object' && 'hint' in value.details && value.details.hint ? ' · ' + String(value.details.hint) : ''}`
   return String(value)
 }

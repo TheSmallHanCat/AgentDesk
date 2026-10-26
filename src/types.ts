@@ -12,6 +12,7 @@ export interface AppError {
   code: string
   stage: string
   message: string
+  details?: { hint?: string; decision?: unknown; [key: string]: unknown }
 }
 export interface Connection {
   id: string
@@ -40,7 +41,7 @@ export interface Project {
   name: string
   path: string
   description: string
-  defaultAgent: 'claude' | 'codex'
+  defaultAgent: string
   defaultModel: string
   permissionMode: string
   pinned: boolean

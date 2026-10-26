@@ -1,4 +1,5 @@
 """Headless browser checks against a running Vite server."""
+import os
 from pathlib import Path
 from playwright.sync_api import sync_playwright, expect
 
@@ -11,7 +12,7 @@ def main():
         page = browser.new_page(viewport={"width": 1280, "height": 820})
         errors = []
         page.on("pageerror", lambda error: errors.append(str(error)))
-        page.goto("http://127.0.0.1:1420")
+        page.goto(os.environ.get("AGENTDESK_UI_URL", "http://127.0.0.1:1420"))
         page.wait_for_load_state("networkidle")
         expect(page.locator("h1")).to_have_text("连接服务器")
         assert page.locator(".side-nav a").count() == 7

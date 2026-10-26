@@ -11,15 +11,32 @@ import { useSettingsStore } from './stores/settings'
 import { useDataStore } from './stores/data'
 import { useToastStore } from './stores/toast'
 import { useWorkspaceStore } from './stores/workspace'
+import { useChatStore } from './stores/chat'
 import { applyTheme, themeIsDark, themeOverrides } from './utils/theme'
 import { call, desktop, errorText } from './utils/api'
 import { matchesShortcut } from './utils/shortcuts'
+import { isRunning } from './utils/chat'
 import type { ConnectionStatus, Transfer } from './types'
 const { t, locale } = useI18n()
 const settings = useSettingsStore()
 const data = useDataStore()
 const toast = useToastStore()
 const workspace = useWorkspaceStore()
+const chat = useChatStore()
+const previousConnectionStates = new Map<string, string>()
+watch(
+  () =>
+    Object.values(data.statuses).map((value) => ({ id: value.connectionId, state: value.state })),
+  (entries) => {
+    for (const entry of entries) {
+      const previous = previousConnectionStates.get(entry.id)
+      if (['disconnected', 'failed'].includes(entry.state) && previous !== entry.state)
+        void chat.releaseConnection(entry.id)
+      previousConnectionStates.set(entry.id, entry.state)
+    }
+  },
+  { flush: 'sync' },
+)
 const router = useRouter()
 const route = useRoute()
 const startupError = ref('')
@@ -37,6 +54,17 @@ const dirty = computed(() =>
 )
 const terminals = computed(() =>
   workspace.tabs.filter((tab) => tab.type === 'terminal' && !tab.exited),
+)
+const runningSessions = computed(() =>
+  Object.entries(chat.states)
+    .filter(([, state]) => !!state.runId && isRunning(state.state))
+    .map(
+      ([key]) =>
+        Object.values(chat.sessions)
+          .flat()
+          .find((session) => key.endsWith(':' + session.id))?.title,
+    )
+    .filter((title): title is string => !!title),
 )
 watch(
   () => settings.values.theme,
@@ -70,7 +98,12 @@ async function requestClose(forceExit = false) {
     transfers.value = []
   }
   if (forceExit || settings.values.closeAction === 'exit') {
-    if (!dirty.value.length && !terminals.value.length && !transfers.value.length) {
+    if (
+      !dirty.value.length &&
+      !terminals.value.length &&
+      !transfers.value.length &&
+      !runningSessions.value.length
+    ) {
       await exit()
       return
     }
@@ -89,6 +122,7 @@ async function exit() {
   if (closing.value) return
   closing.value = true
   try {
+    await useChatStore().flushDrafts()
     await call('sys_exit')
   } catch (e) {
     toast.show(errorText(e), 'error')
@@ -161,12 +195,16 @@ onMounted(async () => {
         ),
       )
       unlisteners.push(
-        await listen<{ projectId?: string }>('notification-open', (event) => {
+        await listen<{ projectId?: string; sessionId?: string }>('notification-open', (event) => {
           if (
             event.payload.projectId &&
             data.projects.some((p) => p.id === event.payload.projectId)
           )
-            void router.push('/workbench/' + event.payload.projectId)
+            void router.push(
+              '/workbench/' +
+                event.payload.projectId +
+                (event.payload.sessionId ? '/' + encodeURIComponent(event.payload.sessionId) : ''),
+            )
         }),
       )
       unlisteners.push(
@@ -229,7 +267,14 @@ onUnmounted(() => {
           <n-alert v-if="dirty.length || terminals.length || transfers.length" type="warning">{{
             t('close.warning')
           }}</n-alert>
-          <p v-else class="muted">{{ t('close.noResources') }}</p>
+          <p v-else-if="!runningSessions.length" class="muted">{{ t('close.noResources') }}</p>
+          <template v-if="runningSessions.length">
+            <h3>{{ t('close.runs') }}</h3>
+            <p>{{ t('close.runsContinue') }}</p>
+            <ul>
+              <li v-for="(title, index) in runningSessions" :key="index">{{ title }}</li>
+            </ul>
+          </template>
           <template v-if="dirty.length"
             ><h3>{{ t('close.unsaved') }}</h3>
             <ul>

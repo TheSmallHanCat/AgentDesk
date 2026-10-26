@@ -1,15 +1,64 @@
 <script setup lang="ts">
 import { computed, ref, watch, onUnmounted } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { ChatbubblesOutline, FolderOpenOutline } from '@vicons/ionicons5'
+import { FolderOpenOutline } from '@vicons/ionicons5'
 import { useDataStore } from '../stores/data'
 import { useWorkspaceStore } from '../stores/workspace'
 import FileTree from '../components/FileTree.vue'
+import ChatPanel from '../components/ChatPanel.vue'
+import SessionCreateDialog from '../components/SessionCreateDialog.vue'
+import { useChatStore, projectKey } from '../stores/chat'
+import { errorText } from '../utils/api'
+import type { Project } from '../types'
 const route = useRoute()
+const router = useRouter()
 const { t } = useI18n()
 const data = useDataStore()
 const workspace = useWorkspaceStore()
+const chat = useChatStore()
+const creating = ref<Project>()
+const renaming = ref<{ project: Project; id: string }>()
+const renameTitle = ref('')
+const deleting = ref<{ project: Project; id: string; title: string }>()
+const actionError = ref('')
+function navigateSession(p: Project, id: string) {
+  void router.push('/workbench/' + p.id + '/' + encodeURIComponent(id))
+  selectedSession(p, id)
+}
+function selectedSession(p: Project, id: string) {
+  void chat.select(p, id)
+}
+function renameSession(p: Project, id: string, title: string) {
+  renaming.value = { project: p, id }
+  renameTitle.value = title
+}
+async function saveTitle() {
+  if (!renaming.value) return
+  try {
+    await chat.rename(renaming.value.project, renaming.value.id, renameTitle.value.trim())
+    renaming.value = undefined
+  } catch (error) {
+    actionError.value = errorText(error)
+  }
+}
+async function deleteSession() {
+  if (!deleting.value) return
+  try {
+    await chat.remove(deleting.value.project, deleting.value.id)
+    deleting.value = undefined
+  } catch (error) {
+    actionError.value = errorText(error)
+  }
+}
+function activity(value: string) {
+  return new Intl.DateTimeFormat(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(new Date(value))
+}
 const files = ref(window.innerWidth >= 1180)
 const projects = ref(true)
 const query = ref('')
@@ -20,14 +69,59 @@ const connection = computed(() =>
 )
 const listed = computed(() =>
   data.projects.filter(
-    (p) => !p.archived && p.name.toLowerCase().includes(query.value.toLowerCase()),
+    (p) =>
+      !p.archived &&
+      (p.name.toLowerCase().includes(query.value.toLowerCase()) ||
+        chat
+          .list(p)
+          .some((session) => session.title.toLowerCase().includes(query.value.toLowerCase()))),
   ),
 )
+watch(
+  () => [
+    route.params.sessionId,
+    project.value
+      ? chat
+          .list(project.value)
+          .map((session) => session.id)
+          .join(',')
+      : '',
+  ],
+  ([id]) => {
+    const p = project.value
+    if (
+      p &&
+      typeof id === 'string' &&
+      chat.list(p).some((session) => session.id === id) &&
+      chat.selected(p)?.id !== id
+    )
+      void chat.select(p, id)
+  },
+  { immediate: true },
+)
+let refreshRevision = 0
 watch(
   project,
   (p) => {
     workspace.projectId = p?.id ?? ''
     if (p) localStorage.setItem('agentdesk-last-project', p.id)
+  },
+  { immediate: true },
+)
+watch(
+  () => [
+    data.projects.map((p) => p.id).join(','),
+    Object.values(data.statuses)
+      .map((s) => s.state)
+      .join(','),
+  ],
+  async () => {
+    const request = ++refreshRevision
+    const online = data.projects.filter((p) => !p.archived && data.online(p.connectionId))
+    for (let offset = 0; offset < online.length; offset += 3) {
+      if (request !== refreshRevision) break
+      await Promise.all(online.slice(offset, offset + 3).map((p) => chat.refresh(p)))
+    }
   },
   { immediate: true },
 )
@@ -63,13 +157,68 @@ onUnmounted(() => stopDrag?.())
           >‹</n-button
         >
       </div>
-      <router-link v-for="p in listed" :key="p.id" :to="'/workbench/' + p.id" class="project-link"
-        ><FolderOpenOutline />
-        <div>
-          <strong>{{ p.pinned ? '★ ' : '' }}{{ p.name }}</strong
-          ><small>{{ data.connections.find((c) => c.id === p.connectionId)?.name }}</small>
-        </div></router-link
-      ><router-link to="/projects" class="manage-projects">{{ t('projects.new') }}</router-link>
+      <section v-for="p in listed" :key="p.id" class="project-group">
+        <div class="project-group-head">
+          <router-link :to="'/workbench/' + p.id" class="project-link"
+            ><FolderOpenOutline />
+            <div>
+              <strong>{{ p.pinned ? '★ ' : '' }}{{ p.name }}</strong
+              ><small>{{ data.connections.find((c) => c.id === p.connectionId)?.name }}</small>
+            </div></router-link
+          ><n-button
+            text
+            size="tiny"
+            :aria-label="t('chat.newSession')"
+            :disabled="!data.online(p.connectionId)"
+            @click="creating = p"
+            >＋</n-button
+          >
+        </div>
+        <button
+          v-for="session in chat
+            .list(p)
+            .filter(
+              (value) =>
+                !query ||
+                p.name.toLowerCase().includes(query.toLowerCase()) ||
+                value.title.toLowerCase().includes(query.toLowerCase()),
+            )"
+          :key="session.id"
+          class="session-link"
+          :class="{ active: project?.id === p.id && chat.active[projectKey(p)] === session.id }"
+          @click="navigateSession(p, session.id)"
+        >
+          <span class="agent-mark" :title="session.agent">{{
+            session.agent.slice(0, 1).toUpperCase()
+          }}</span
+          ><span class="session-copy"
+            ><strong>{{ session.title }}</strong
+            ><small>{{ activity(session.updatedAt) }}</small></span
+          ><span class="session-dot" :class="session.status" />
+          <n-dropdown
+            trigger="click"
+            :options="[
+              { key: 'rename', label: t('common.rename') },
+              { key: 'delete', label: t('common.delete') },
+            ]"
+            @select="
+              (key) =>
+                key === 'rename'
+                  ? renameSession(p, session.id, session.title)
+                  : (deleting = { project: p, id: session.id, title: session.title })
+            "
+            ><span
+              class="session-menu"
+              role="button"
+              tabindex="0"
+              :aria-label="t('chat.sessionActions')"
+              @click.stop
+              >⋯</span
+            ></n-dropdown
+          >
+        </button>
+      </section>
+      <router-link to="/projects" class="manage-projects">{{ t('projects.new') }}</router-link>
       <div class="project-resize" role="separator" @pointerdown="resizeProjects" />
     </aside>
     <div class="chat-area">
@@ -114,13 +263,15 @@ onUnmounted(() => stopDrag?.())
           >{{ t('workbench.disconnected') }}
           <router-link to="/connections">{{ t('nav.connections') }}</router-link></n-alert
         >
-        <div class="agent-empty empty">
-          <ChatbubblesOutline />
-          <h2>{{ t('workbench.agentLater') }}</h2>
-          <p>{{ t('workbench.agentHelp') }}</p>
-          <span class="execution-label mono">{{ t('workbench.remote') }} · {{ project.path }}</span>
-        </div></template
-      >
+        <n-alert v-if="chat.errors[projectKey(project)]" type="warning" class="connection-warning"
+          >{{ chat.errors[projectKey(project)] }}
+          <router-link to="/environment">{{ t('environment.title') }}</router-link
+          ><n-button text size="small" @click="chat.refresh(project)">{{
+            t('common.refresh')
+          }}</n-button></n-alert
+        >
+        <ChatPanel :project="project" @create="creating = project"
+      /></template>
       <div v-else class="empty no-project">
         <FolderOpenOutline />
         <h2>{{ t('workbench.noProject') }}</h2>
@@ -132,6 +283,26 @@ onUnmounted(() => stopDrag?.())
       <FileTree v-if="data.online(project.connectionId)" :project="project" :key="project.id" />
       <div v-else class="empty">{{ t('workbench.disconnected') }}</div>
     </div>
+    <SessionCreateDialog :project="creating" @close="creating = undefined" />
+    <n-modal :show="!!renaming" @update:show="(value) => !value && (renaming = undefined)"
+      ><n-card style="width: 420px" :title="t('chat.renameSession')"
+        ><n-input v-model:value="renameTitle" :maxlength="256" />
+        <p v-if="actionError" role="alert">{{ actionError }}</p>
+        <n-button type="primary" :disabled="!renameTitle.trim()" @click="saveTitle">{{
+          t('common.save')
+        }}</n-button></n-card
+      ></n-modal
+    >
+    <n-modal :show="!!deleting" @update:show="(value) => !value && (deleting = undefined)"
+      ><n-card style="width: 440px" :title="t('chat.deleteSession')"
+        ><p>{{ t('chat.deleteConfirm', { title: deleting?.title }) }}</p>
+        <p v-if="actionError" role="alert">{{ actionError }}</p>
+        <div class="actions">
+          <n-button @click="deleting = undefined">{{ t('common.cancel') }}</n-button
+          ><n-button type="error" @click="deleteSession">{{ t('common.delete') }}</n-button>
+        </div></n-card
+      ></n-modal
+    >
   </section>
 </template>
 <style scoped>
@@ -260,5 +431,87 @@ onUnmounted(() => stopDrag?.())
   .project-panel {
     max-width: 220px;
   }
+}
+.project-group {
+  margin-bottom: 12px;
+}
+.project-group-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.project-group-head .project-link {
+  min-width: 0;
+  flex: 1;
+  padding: 10px 6px;
+}
+.project-group-head strong {
+  font-size: 12px;
+}
+.session-link {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  border: 0;
+  text-align: left;
+  color: var(--text);
+  background: transparent;
+  border-radius: 6px;
+  padding: 9px 8px;
+  margin: 2px 0;
+}
+.session-link:hover,
+.session-link.active {
+  background: var(--surface2);
+}
+.session-link.active {
+  color: var(--primary);
+}
+.agent-mark {
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  flex: none;
+}
+.session-copy {
+  display: block;
+  min-width: 0;
+  flex: 1;
+}
+.session-copy strong {
+  display: block;
+  font-weight: 500;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.session-copy small {
+  display: block;
+  color: var(--muted);
+  font-size: 10px;
+  margin-top: 4px;
+}
+.session-dot {
+  height: 6px;
+  width: 6px;
+  border-radius: 50%;
+  background: var(--muted);
+  flex: none;
+}
+.session-dot.running {
+  background: #388c60;
+}
+.session-dot.awaiting_approval {
+  background: #c38b24;
+}
+.session-menu {
+  padding: 2px 5px;
+  color: var(--muted);
 }
 </style>
