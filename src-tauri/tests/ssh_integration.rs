@@ -113,6 +113,13 @@ impl server::Handler for ServerHandler {
         session: &mut Session,
     ) -> Result<(), Self::Error> {
         if self.channels.contains_key(&id) {
+            if data
+                .windows(b"fixture-disconnect".len())
+                .any(|w| w == b"fixture-disconnect")
+            {
+                session.disconnect(russh::Disconnect::ByApplication, "fixture disconnect", "en")?;
+                return Ok(());
+            }
             session.data(id, data.to_vec())?;
         }
         Ok(())
@@ -346,6 +353,7 @@ struct Fixture {
     port: u16,
     key: PrivateKey,
     user_key: PrivateKey,
+    ecdsa: PrivateKey,
     observed: Arc<Observed>,
     task: tokio::task::JoinHandle<()>,
     dir: tempfile::TempDir,
@@ -359,13 +367,20 @@ impl Fixture {
     async fn start() -> Self {
         let key = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).unwrap();
         let user_key = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).unwrap();
+        let ecdsa = PrivateKey::random(
+            &mut rand::rng(),
+            Algorithm::Ecdsa {
+                curve: russh::keys::ssh_key::EcdsaCurve::NistP256,
+            },
+        )
+        .unwrap();
         let observed = Arc::new(Observed::default());
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
             .await
             .unwrap();
         let port = listener.local_addr().unwrap().port();
         let config = Arc::new(server::Config {
-            keys: vec![key.clone()],
+            keys: vec![key.clone(), ecdsa.clone()],
             auth_rejection_time: Duration::ZERO,
             auth_rejection_time_initial: Some(Duration::ZERO),
             ..Default::default()
@@ -394,6 +409,7 @@ impl Fixture {
             port,
             key,
             user_key,
+            ecdsa,
             observed,
             task,
             dir: tempfile::tempdir().unwrap(),
@@ -451,11 +467,11 @@ async fn network_disconnect_reconnects_without_replaying_commands() {
     let m = f.manager(&c);
     let t = target(&c);
     let first = m
-        .connect(&t, Some("fixture-password".into()), false)
+        .connect(&t, Some("fixture-password".into()), None)
         .await
         .unwrap();
     m.trust(&t, first.fingerprint.as_ref().unwrap()).unwrap();
-    m.connect(&t, Some("fixture-password".into()), false)
+    m.connect(&t, Some("fixture-password".into()), None)
         .await
         .unwrap();
     assert!(m.exec(&t, "fixture-disconnect").await.is_err());
@@ -484,11 +500,11 @@ async fn pty_rejection_does_not_start_a_remote_command() {
     let m = f.manager(&c);
     let t = target(&c);
     let first = m
-        .connect(&t, Some("fixture-password".into()), false)
+        .connect(&t, Some("fixture-password".into()), None)
         .await
         .unwrap();
     m.trust(&t, first.fingerprint.as_ref().unwrap()).unwrap();
-    m.connect(&t, Some("fixture-password".into()), false)
+    m.connect(&t, Some("fixture-password".into()), None)
         .await
         .unwrap();
     let pty = Arc::new(PtyManager::default());
@@ -519,14 +535,14 @@ async fn two_servers_remain_independent_in_one_connection_manager() {
     for c in [&a, &b] {
         let t = target(c);
         let pending = manager
-            .connect(&t, Some("fixture-password".into()), false)
+            .connect(&t, Some("fixture-password".into()), None)
             .await
             .unwrap();
         manager
             .trust(&t, pending.fingerprint.as_deref().unwrap())
             .unwrap();
         manager
-            .connect(&t, Some("fixture-password".into()), false)
+            .connect(&t, Some("fixture-password".into()), None)
             .await
             .unwrap();
     }
@@ -548,23 +564,23 @@ async fn two_servers_remain_independent_in_one_connection_manager() {
 }
 #[cfg(windows)]
 #[tokio::test]
-async fn rejected_saved_password_is_cleared_from_the_os_store() {
+async fn rejected_saved_password_is_retained_until_explicit_removal() {
     use agentdesk_lib::secrets::Secrets;
     let f = Fixture::start().await;
     let c = f.connection();
     let m = f.manager(&c);
     let t = target(&c);
     let first = m
-        .connect(&t, Some("fixture-password".into()), false)
+        .connect(&t, Some("fixture-password".into()), None)
         .await
         .unwrap();
     m.trust(&t, first.fingerprint.as_ref().unwrap()).unwrap();
     Secrets::set(&c.id, "password", "fixture-rejected-password").unwrap();
-    let result = m.connect(&t, None, false).await;
+    let result = m.connect(&t, None, None).await;
     let saved = Secrets::get(&c.id, "password").unwrap();
     let _ = Secrets::clear(&c.id, "password");
     assert_eq!(result.unwrap_err().code, "E_AUTH");
-    assert!(saved.is_none());
+    assert!(saved.is_some());
     assert!(!m.is_active(&c.id));
 }
 fn target(c: &Connection) -> Target {
@@ -576,6 +592,35 @@ fn target(c: &Connection) -> Target {
     }
 }
 
+#[cfg(windows)]
+#[tokio::test]
+async fn review_saved_password_survives_unchanged_reconnect() {
+    use agentdesk_lib::secrets::Secrets;
+    let f = Fixture::start().await;
+    let c = f.connection();
+    let m = f.manager(&c);
+    let t = target(&c);
+    let first = m
+        .connect(&t, Some("fixture-password".into()), None)
+        .await
+        .unwrap();
+    m.trust(&t, first.fingerprint.as_deref().unwrap()).unwrap();
+    Secrets::set(&c.id, "password", "fixture-password").unwrap();
+    m.connect(&t, None, None).await.unwrap();
+    m.disconnect(&t).await.unwrap();
+    assert!(Secrets::get(&c.id, "password").unwrap().is_some());
+    m.connect(&t, None, Some(false)).await.unwrap();
+    m.disconnect(&t).await.unwrap();
+    assert!(Secrets::get(&c.id, "password").unwrap().is_none());
+    m.connect(&t, Some("fixture-password".into()), Some(true))
+        .await
+        .unwrap();
+    m.disconnect(&t).await.unwrap();
+    let saved = Secrets::get(&c.id, "password").unwrap();
+    Secrets::clear(&c.id, "password").unwrap();
+    assert!(saved.is_some());
+}
+
 #[tokio::test]
 async fn fingerprint_confirmation_precedes_authentication_and_changed_key_is_rejected() {
     let f = Fixture::start().await;
@@ -583,14 +628,14 @@ async fn fingerprint_confirmation_precedes_authentication_and_changed_key_is_rej
     let m = f.manager(&c);
     let t = target(&c);
     let first = m
-        .connect(&t, Some("fixture-password".into()), false)
+        .connect(&t, Some("fixture-password".into()), None)
         .await
         .unwrap();
     assert_eq!(first.state, "awaitingTrust");
     assert_eq!(f.observed.auth.load(Ordering::SeqCst), 0);
     m.trust(&t, first.fingerprint.as_ref().unwrap()).unwrap();
     let connected = m
-        .connect(&t, Some("fixture-password".into()), false)
+        .connect(&t, Some("fixture-password".into()), None)
         .await
         .unwrap();
     assert_eq!(connected.state, "connected");
@@ -607,7 +652,7 @@ async fn fingerprint_confirmation_precedes_authentication_and_changed_key_is_rej
     )
     .unwrap();
     let changed = m
-        .connect(&t, Some("fixture-password".into()), false)
+        .connect(&t, Some("fixture-password".into()), None)
         .await
         .unwrap();
     assert_eq!(changed.state, "failed");
@@ -656,11 +701,11 @@ async fn pty_channel_echoes_unicode_resizes_and_checks_target_ownership() {
     let m = f.manager(&c);
     let t = target(&c);
     let first = m
-        .connect(&t, Some("fixture-password".into()), false)
+        .connect(&t, Some("fixture-password".into()), None)
         .await
         .unwrap();
     m.trust(&t, first.fingerprint.as_ref().unwrap()).unwrap();
-    m.connect(&t, Some("fixture-password".into()), false)
+    m.connect(&t, Some("fixture-password".into()), None)
         .await
         .unwrap();
     let pty = Arc::new(PtyManager::default());
@@ -709,11 +754,11 @@ async fn sftp_lists_reads_and_preserves_crlf_and_permissions_on_temp_write() {
     let m = f.manager(&c);
     let t = target(&c);
     let first = m
-        .connect(&t, Some("fixture-password".into()), false)
+        .connect(&t, Some("fixture-password".into()), None)
         .await
         .unwrap();
     m.trust(&t, first.fingerprint.as_ref().unwrap()).unwrap();
-    m.connect(&t, Some("fixture-password".into()), false)
+    m.connect(&t, Some("fixture-password".into()), None)
         .await
         .unwrap();
     let s = sftp::session(&m, &t).await.unwrap();
@@ -771,4 +816,28 @@ async fn streamlocal_direct_and_reverse_requests_are_supported() {
     let _ = h
         .disconnect(russh::Disconnect::ByApplication, "done", "en")
         .await;
+}
+
+#[tokio::test]
+async fn review_ecdsa_only_record_selects_matching_host_algorithm() {
+    let f = Fixture::start().await;
+    let c = f.connection();
+    std::fs::write(
+        f.dir.path().join("known_hosts"),
+        format!(
+            "[127.0.0.1]:{}	{}
+",
+            f.port,
+            f.ecdsa.public_key().to_openssh().unwrap().replace(' ', "	")
+        ),
+    )
+    .unwrap();
+    let manager = f.manager(&c);
+    let status = manager
+        .connect(&target(&c), Some("fixture-password".into()), None)
+        .await
+        .unwrap();
+    assert_eq!(status.state, "connected");
+    assert_eq!(status.key_type.as_deref(), Some("ecdsa-sha2-nistp256"));
+    manager.disconnect(&target(&c)).await.unwrap();
 }

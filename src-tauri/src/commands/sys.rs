@@ -6,6 +6,7 @@ use crate::{
 };
 use std::io::Write;
 use tauri::{Emitter, Manager};
+use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_notification::NotificationExt;
 #[tauri::command]
 pub fn settings_get(state: tauri::State<'_, AppState>) -> AppResult<Settings> {
@@ -24,17 +25,51 @@ pub fn settings_set(
 pub fn diag_list(state: tauri::State<'_, AppState>) -> AppResult<Vec<Diagnostic>> {
     state.diagnostics.list()
 }
-#[tauri::command]
-pub fn diag_export(state: tauri::State<'_, AppState>, path: String) -> AppResult<String> {
-    state.diagnostics.export(std::path::Path::new(&path))
+async fn save_destination(
+    app: tauri::AppHandle,
+    name: &'static str,
+) -> AppResult<Option<std::path::PathBuf>> {
+    tauri::async_runtime::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .set_file_name(name)
+            .blocking_save_file()
+            .map(|p| p.into_path().map_err(|e| AppError::io("save-dialog", e)))
+            .transpose()
+    })
+    .await
+    .map_err(|e| AppError::io("save-dialog", e))?
 }
 #[tauri::command]
-pub fn editor_save_local(path: String, content: String) -> AppResult<String> {
-    let (path, mut file) = create_unique(std::path::Path::new(&path))?;
-    file.write_all(content.as_bytes())
-        .map_err(|e| AppError::io("local-save", e))?;
-    file.sync_all().map_err(|e| AppError::io("local-save", e))?;
-    Ok(path.to_string_lossy().into_owned())
+pub async fn diag_export(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> AppResult<Option<String>> {
+    let Some(path) = save_destination(app, "agentdesk-diagnostics.json").await? else {
+        return Ok(None);
+    };
+    state.diagnostics.export(&path).map(Some)
+}
+#[tauri::command]
+pub async fn editor_save_local(
+    app: tauri::AppHandle,
+    content: String,
+) -> AppResult<Option<String>> {
+    let Some(path) = save_destination(app, "agentdesk-file.txt").await? else {
+        return Ok(None);
+    };
+    let (path, mut file) = create_unique(&path)?;
+    let result = (|| {
+        file.write_all(content.as_bytes())
+            .map_err(|e| AppError::io("local-save", e))?;
+        file.sync_all().map_err(|e| AppError::io("local-save", e))
+    })();
+    drop(file);
+    if let Err(error) = result {
+        let _ = std::fs::remove_file(&path);
+        return Err(error);
+    }
+    Ok(Some(path.to_string_lossy().into_owned()))
 }
 #[tauri::command]
 pub fn sys_hide(app: tauri::AppHandle) -> AppResult<()> {

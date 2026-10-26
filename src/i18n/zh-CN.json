@@ -197,5 +197,6 @@
   "settings.previousTab": "上一个标签",
   "settings.split": "新增分屏",
   "projects.approvalDefault": "按需审批",
-  "projects.approvalPlan": "只读规划"
+  "projects.approvalPlan": "只读规划",
+  "editor.inPlaceWarning": "文件已原地写入并完成读回校验，硬链接和原有元数据已保留。此保存方式无法保证原子性，写入期间断线可能导致内容不完整。"
 }

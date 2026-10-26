@@ -19,6 +19,7 @@ pnpm tauri dev
 ```bash
 pnpm test
 pnpm typecheck
+pnpm format:check
 pnpm build
 cargo fmt --manifest-path src-tauri/Cargo.toml --check
 cargo test --manifest-path src-tauri/Cargo.toml
@@ -39,7 +40,7 @@ pnpm protocol:check
 4. 工作台可以打开 Shell、Claude Code 或 Codex 原生终端。CLI 必须已经在远端安装并由用户自行登录；每个终端都是独立会话，不共享未来的图形会话上下文。
 5. 右侧文件树支持懒加载、隐藏文件、软链接标识与右键菜单。双击文件进入编辑器；UTF-8 文本上限 2 MiB，支持撤销、搜索替换和常见语言高亮。
 6. 终端与编辑器共用标签，可切换专注视图，最多四分屏；关闭分屏保留标签。关闭终端标签会结束对应 PTY，断线后不会自动重建终端。
-7. 下载通过系统目录选择器确定本机位置；目录先远端打包，重名自动编号。任务页显示进度、速度、取消及重试。退出前显示未保存文件、终端和传输。
+7. 下载通过系统目录选择器确定本机位置；目录远端流式打包，重名自动编号。任务页显示进度、速度、取消及重试。退出前显示未保存文件、终端和传输。
 
 默认全局快捷键：`Ctrl+Shift+T` 新建 Shell，`Ctrl+S` 保存当前编辑器，`Ctrl+Shift+F` 切换专注视图。可以在设置中查看和修改。其他终端按键交给远端程序。
 

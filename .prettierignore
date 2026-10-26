@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.tmp/
+.agentdesk-data/
+test-results/
+src-tauri/target/
+src-tauri/gen/
+host/.venv/
+src/protocol/generated.ts
+src/components.d.ts
+pnpm-lock.yaml

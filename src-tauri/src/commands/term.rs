@@ -72,3 +72,8 @@ pub fn term_close(
     state.terminals.close(&target, &terminal_id)?;
     Ok(target.reply(()))
 }
+
+#[tauri::command]
+pub fn term_reset(state: tauri::State<'_, AppState>) -> AppResult<()> {
+    state.terminals.reset_frontend()
+}

@@ -197,5 +197,6 @@
   "settings.previousTab": "Previous tab",
   "settings.split": "Add split",
   "projects.approvalDefault": "Request approval",
-  "projects.approvalPlan": "Read-only planning"
+  "projects.approvalPlan": "Read-only planning",
+  "editor.inPlaceWarning": "The file was saved in place and verified. Hard links and existing metadata were retained. This method is not atomic; interruption during writing can leave incomplete content."
 }

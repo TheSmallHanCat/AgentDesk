@@ -16,6 +16,8 @@ use tokio::{
     sync::Semaphore,
 };
 use tokio_util::sync::CancellationToken;
+#[path = "archive.rs"]
+mod archive;
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Transfer {
@@ -57,29 +59,32 @@ impl TransferManager {
             .map(|j| j.value.clone())
             .collect())
     }
-    fn update(&self, app: &tauri::AppHandle, id: &str, change: impl FnOnce(&mut Transfer)) {
+    fn update(&self, app: &Option<tauri::AppHandle>, id: &str, change: impl FnOnce(&mut Transfer)) {
         if let Ok(mut jobs) = self.jobs.lock() {
             if let Some(j) = jobs.get_mut(id) {
                 let previous = j.value.state.clone();
                 change(&mut j.value);
-                let _ = app.emit("transfer-state", &j.value);
-                if previous != j.value.state {
-                    let count = jobs
-                        .values()
-                        .filter(|j| matches!(j.value.state.as_str(), "queued" | "running"))
-                        .count();
-                    if let Some(tray) = app.tray_by_id("main-tray") {
-                        let _ = tray.set_tooltip(Some(if count > 0 {
-                            format!("AgentDesk · {count}")
-                        } else {
-                            "AgentDesk".into()
-                        }));
-                        let rgba = if count > 0 {
-                            [208, 171, 112, 255].repeat(32 * 32)
-                        } else {
-                            [63, 112, 212, 255].repeat(32 * 32)
-                        };
-                        let _ = tray.set_icon(Some(tauri::image::Image::new_owned(rgba, 32, 32)));
+                if let Some(app) = app {
+                    let _ = app.emit("transfer-state", &j.value);
+                    if previous != j.value.state {
+                        let count = jobs
+                            .values()
+                            .filter(|j| matches!(j.value.state.as_str(), "queued" | "running"))
+                            .count();
+                        if let Some(tray) = app.tray_by_id("main-tray") {
+                            let _ = tray.set_tooltip(Some(if count > 0 {
+                                format!("AgentDesk · {count}")
+                            } else {
+                                "AgentDesk".into()
+                            }));
+                            let rgba = if count > 0 {
+                                [208, 171, 112, 255].repeat(32 * 32)
+                            } else {
+                                [63, 112, 212, 255].repeat(32 * 32)
+                            };
+                            let _ =
+                                tray.set_icon(Some(tauri::image::Image::new_owned(rgba, 32, 32)));
+                        }
                     }
                 }
             }
@@ -100,12 +105,33 @@ impl TransferManager {
         j.cancel.cancel();
         Ok(())
     }
-    pub async fn close_connection(&self, id: &str) {
-        if let Ok(jobs) = self.jobs.lock() {
-            for j in jobs.values().filter(|j| j.value.target.connection_id == id) {
-                j.cancel.cancel();
+    pub async fn close_connection(&self, id: &str) -> AppResult<()> {
+        let waits = {
+            let jobs = self.jobs.lock().map_err(|e| AppError::io("transfer", e))?;
+            jobs.values()
+                .filter(|job| {
+                    job.value.target.connection_id == id
+                        && matches!(job.value.state.as_str(), "queued" | "running")
+                })
+                .map(|job| {
+                    job.cancel.cancel();
+                    job.done.clone()
+                })
+                .collect::<Vec<_>>()
+        };
+        tokio::time::timeout(Duration::from_secs(20), async {
+            for done in waits {
+                done.cancelled().await;
             }
-        }
+        })
+        .await
+        .map_err(|_| {
+            AppError::new(
+                "E_TIMEOUT",
+                "transfer",
+                "Transfers are still cleaning up; wait before disconnecting",
+            )
+        })
     }
     pub async fn shutdown(&self) -> AppResult<()> {
         let waits = {
@@ -134,12 +160,13 @@ impl TransferManager {
     }
     pub fn download(
         self: &Arc<Self>,
-        app: tauri::AppHandle,
+        app: impl Into<Option<tauri::AppHandle>>,
         ssh: Arc<SshManager>,
         target: Target,
         path: String,
         destination: String,
     ) -> AppResult<String> {
+        let app = app.into();
         ssh.validate_target(&target)?;
         let path = sftp::remote_path(&path)?;
         if path == "/" {
@@ -236,7 +263,7 @@ impl TransferManager {
     #[allow(clippy::too_many_arguments)]
     async fn run(
         &self,
-        app: &tauri::AppHandle,
+        app: &Option<tauri::AppHandle>,
         id: &str,
         ssh: &SshManager,
         target: &Target,
@@ -244,47 +271,73 @@ impl TransferManager {
         destination: &str,
         cancel: &CancellationToken,
     ) -> AppResult<PathBuf> {
-        let s = sftp::session(ssh, target).await?;
-        let result=async {
-            let meta=s.metadata(path).await.map_err(sftp::error)?;
-            if !meta.is_dir()&&!meta.is_regular(){return Err(AppError::new("E_FILE_TYPE","download","Only files and directories can be downloaded"));}
-            let name=safe_name(path.rsplit('/').next().unwrap_or("download"));let name=if meta.is_dir(){format!("{name}.tar.gz")}else{name};
-            let temp=tempfile::Builder::new().prefix(".agentdesk-").suffix(".part").tempfile_in(destination).map_err(|e|AppError::io("download",e))?;
-            let mut file=tokio::fs::File::from_std(temp.reopen().map_err(|e|AppError::io("download",e))?);
-            let started=Instant::now();let mut last=Instant::now();let mut transferred=0u64;
-            if meta.is_dir() {
-                let(parent,base)=path.rsplit_once('/').unwrap();let parent=if parent.is_empty(){"/"}else{parent};
-                let script=format!("set -e\ntmp=$(mktemp /tmp/agentdesk-download.XXXXXXXX)\ntrap 'rm -f -- \"$tmp\"' EXIT HUP INT TERM\ntar -czf \"$tmp\" -C {} -- {}\nwc -c < \"$tmp\"\ncat -- \"$tmp\"",sftp::quote(parent),sftp::quote(base));
-                let mut channel=ssh.open_channel(target).await?;channel.exec(true,format!("sh -c {}",sftp::quote(&script))).await.map_err(|e|AppError::io("archive",e))?;
-                let copied=async {
-                    let mut header=Vec::new();let mut total=None;let mut status=None;
-                    loop {let message=tokio::select!{_=cancel.cancelled()=>return Err(cancelled()),m=tokio::time::timeout(Duration::from_secs(60),channel.wait())=>m.map_err(|_|AppError::new("E_TIMEOUT","archive","Archive download stopped responding"))?};
-                        match message {
-                            Some(russh::ChannelMsg::Data{data})=>{
-                                let bytes=if total.is_none(){header.extend_from_slice(&data);if let Some(n)=header.iter().position(|b|*b==b'\n'){total=Some(std::str::from_utf8(&header[..n]).ok().and_then(|s|s.trim().parse::<u64>().ok()).ok_or_else(||AppError::new("E_ARCHIVE","archive","Invalid archive size"))?);self.update(app,id,|v|v.total=total.unwrap());header.split_off(n+1)}else{if header.len()>64{return Err(AppError::new("E_ARCHIVE","archive","Invalid archive header"));}continue;}}else{data.to_vec()};
-                                file.write_all(&bytes).await.map_err(|e|AppError::io("download",e))?;transferred+=bytes.len() as u64;self.progress(app,id,transferred,started,&mut last);
-                            },
-                            Some(russh::ChannelMsg::ExitStatus{exit_status})=>status=Some(exit_status),Some(russh::ChannelMsg::Close)|None=>break,Some(russh::ChannelMsg::Failure)=>return Err(AppError::new("E_ARCHIVE","archive","Remote archive command rejected")),_=>{}
-                        }
-                    }
-                    if status!=Some(0)||total!=Some(transferred){return Err(AppError::new("E_ARCHIVE","archive","Archive download did not complete"));}Ok(())
-                }.await;
-                let _=channel.close().await;copied?;
-            } else {
-                let total=meta.size.unwrap_or(0);self.update(app,id,|v|v.total=total);
-                let mut remote=s.open(path).await.map_err(sftp::error)?;let mut buf=vec![0u8;65536];
-                let copied=async {loop {let n=tokio::select!{_=cancel.cancelled()=>return Err(cancelled()),n=remote.read(&mut buf)=>n.map_err(|e|AppError::io("download",e))?};if n==0{break;}file.write_all(&buf[..n]).await.map_err(|e|AppError::io("download",e))?;transferred+=n as u64;self.progress(app,id,transferred,started,&mut last);}if transferred!=total{return Err(AppError::new("E_CONFLICT","download","Remote file size changed during download"));}let after=s.metadata(path).await.map_err(sftp::error)?;if after.mtime!=meta.mtime||after.size!=meta.size{return Err(AppError::new("E_CONFLICT","download","Remote file changed during download"));}Ok(())}.await;
-                let _=remote.close().await;copied?;
+        let session = sftp::session(ssh, target).await?;
+        let result = async {
+            let meta = session.metadata(path).await.map_err(sftp::error)?;
+            if !meta.is_dir() && !meta.is_regular() {
+                return Err(AppError::new("E_FILE_TYPE", "download", "Only files and directories can be downloaded"));
             }
-            if cancel.is_cancelled(){return Err(cancelled());}
-            file.flush().await.map_err(|e|AppError::io("download",e))?;file.sync_all().await.map_err(|e|AppError::io("download",e))?;drop(file);
-            self.update(app,id,|v|{v.transferred=transferred;v.total=transferred;});persist(temp,Path::new(destination),&name)
+            let name = safe_name(path.rsplit('/').next().unwrap_or("download"));
+            let name = if meta.is_dir() { format!("{name}.tar.gz") } else { name };
+            let temp = tempfile::Builder::new()
+                .prefix(".agentdesk-")
+                .suffix(".part")
+                .tempfile_in(destination)
+                .map_err(|e| AppError::io("download", e))?;
+            let mut file = tokio::fs::File::from_std(temp.reopen().map_err(|e| AppError::io("download", e))?);
+            let started = Instant::now();
+            let mut last = Instant::now();
+            let transferred = if meta.is_dir() {
+                archive::copy(ssh, target, path, &mut file, cancel, |bytes| {
+                    self.progress(app, id, bytes, started, &mut last);
+                }).await?
+            } else {
+                let total = meta.size.unwrap_or(0);
+                self.update(app, id, |value| value.total = total);
+                let mut remote = session.open(path).await.map_err(sftp::error)?;
+                let copied = async {
+                    let mut transferred = 0u64;
+                    let mut buffer = vec![0u8; 65536];
+                    loop {
+                        let amount = tokio::select! {
+                            _ = cancel.cancelled() => return Err(cancelled()),
+                            read = tokio::time::timeout(Duration::from_secs(60), remote.read(&mut buffer)) => {
+                                read.map_err(|_| AppError::new("E_TIMEOUT", "download", "File download stopped responding"))?
+                                    .map_err(|e| AppError::io("download", e))?
+                            }
+                        };
+                        if amount == 0 { break; }
+                        file.write_all(&buffer[..amount]).await.map_err(|e| AppError::io("download", e))?;
+                        transferred += amount as u64;
+                        self.progress(app, id, transferred, started, &mut last);
+                    }
+                    if transferred != total {
+                        return Err(AppError::new("E_CONFLICT", "download", "Remote file size changed during download"));
+                    }
+                    let after = session.metadata(path).await.map_err(sftp::error)?;
+                    if after.mtime != meta.mtime || after.size != meta.size {
+                        return Err(AppError::new("E_CONFLICT", "download", "Remote file changed during download"));
+                    }
+                    Ok(transferred)
+                }.await;
+                let _ = remote.close().await;
+                copied?
+            };
+            if cancel.is_cancelled() { return Err(cancelled()); }
+            file.flush().await.map_err(|e| AppError::io("download", e))?;
+            file.sync_all().await.map_err(|e| AppError::io("download", e))?;
+            drop(file);
+            self.update(app, id, |value| {
+                value.transferred = transferred;
+                value.total = transferred;
+            });
+            persist(temp, Path::new(destination), &name)
         }.await;
-        sftp::finish(s, result).await
+        sftp::finish(session, result).await
     }
     fn progress(
         &self,
-        app: &tauri::AppHandle,
+        app: &Option<tauri::AppHandle>,
         id: &str,
         bytes: u64,
         start: Instant,

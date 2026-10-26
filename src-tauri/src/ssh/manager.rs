@@ -147,7 +147,7 @@ impl SshManager {
         self: &Arc<Self>,
         target: &Target,
         credential: Option<String>,
-        save: bool,
+        save: Option<bool>,
     ) -> AppResult<ConnectionStatus> {
         self.validate_target(target)?;
         let connection = self.db.connection(&target.connection_id)?;
@@ -193,16 +193,18 @@ impl SshManager {
         let result = tokio::select! {biased; _=cancel.cancelled()=>Err(AppError::new("E_CANCELLED","connection","Connection cancelled")), result=self.establish(&connection,credential.as_deref().map(|s|s.as_str()))=>result};
         match result {
             Ok(status) if status.state == "connected" => {
-                if save {
+                if save == Some(true) {
                     if let Some(secret) = credential.as_ref() {
                         if let Err(error) = Secrets::set(&connection.id, kind, secret) {
                             self.disconnect_locked(&connection.id).await?;
                             return Err(error);
                         }
                     }
-                } else if let Err(error) = Secrets::clear(&connection.id, kind) {
-                    self.disconnect_locked(&connection.id).await?;
-                    return Err(error);
+                } else if save == Some(false) {
+                    if let Err(error) = Secrets::clear(&connection.id, kind) {
+                        self.disconnect_locked(&connection.id).await?;
+                        return Err(error);
+                    }
                 }
                 self.status(status.clone());
                 let this = Arc::clone(self);
@@ -263,6 +265,7 @@ impl SshManager {
             observed: observed.clone(),
         };
         let config = Arc::new(client::Config {
+            preferred: self.known.preferred(&connection.host, connection.port)?,
             keepalive_interval: Some(Duration::from_secs(15)),
             keepalive_max: 2,
             nodelay: true,
@@ -353,9 +356,6 @@ impl SshManager {
             auth_result.as_ref().err().map(|e| e.code.as_str()),
         );
         if let Err(error) = auth_result {
-            if error.code == "E_AUTH" {
-                Secrets::clear(&connection.id, secret_kind(connection))?;
-            }
             let _ = handle
                 .disconnect(Disconnect::ByApplication, "Authentication failed", "en")
                 .await;
@@ -516,9 +516,14 @@ impl SshManager {
     pub async fn exec(&self, target: &Target, command: &str) -> AppResult<Vec<u8>> {
         let mut channel = self.open_channel(target).await?;
         channel
-            .exec(true, command)
+            .exec(true, "exec /bin/sh -s")
             .await
             .map_err(|e| AppError::io("exec", e))?;
+        channel
+            .data_bytes([command.as_bytes(), b"\n"].concat())
+            .await
+            .map_err(|e| AppError::io("exec", e))?;
+        channel.eof().await.map_err(|e| AppError::io("exec", e))?;
         let result = tokio::time::timeout(Duration::from_secs(60), async {
             let mut output = Vec::new();
             let mut status = None;

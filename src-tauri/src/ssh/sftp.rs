@@ -30,6 +30,8 @@ pub struct FileDocument {
     pub size: u64,
     pub permissions: u32,
     pub line_ending: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub save_mode: Option<String>,
 }
 pub fn error(e: russh_sftp::client::error::Error) -> AppError {
     match &e {
@@ -184,6 +186,7 @@ pub fn document(path: String, bytes: Vec<u8>, meta: FileAttributes) -> AppResult
         size: meta.size.unwrap_or(0),
         permissions: meta.permissions.unwrap_or(0),
         line_ending: ending.into(),
+        save_mode: None,
     })
 }
 pub async fn write_temp(

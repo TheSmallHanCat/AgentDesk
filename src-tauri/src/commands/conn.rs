@@ -66,7 +66,7 @@ pub async fn conn_connect(
     state: tauri::State<'_, AppState>,
     target: Target,
     credential: Option<String>,
-    save_secret: bool,
+    save_secret: Option<bool>,
 ) -> AppResult<Reply<ConnectionStatus>> {
     let status = state.ssh.connect(&target, credential, save_secret).await?;
     Ok(target.reply(status))
@@ -84,7 +84,7 @@ pub async fn conn_disconnect(
     state
         .transfers
         .close_connection(&target.connection_id)
-        .await;
+        .await?;
     state.ssh.disconnect(&target).await?;
     Ok(target.reply(()))
 }
@@ -110,4 +110,20 @@ pub fn conn_import_ssh_config() -> AppResult<config_import::Imported> {
             .or_else(|_| std::env::var("USER"))
             .unwrap_or_default(),
     )
+}
+
+#[tauri::command]
+pub fn conn_secret_status(
+    state: tauri::State<'_, AppState>,
+    target: Target,
+) -> AppResult<Reply<bool>> {
+    state.ssh.validate_target(&target)?;
+    let c = state.db.connection(&target.connection_id)?;
+    let kind = if c.auth_method == "key" {
+        "passphrase"
+    } else {
+        "password"
+    };
+    Ok(target
+        .reply(c.auth_method != "agent" && crate::secrets::Secrets::get(&c.id, kind)?.is_some()))
 }

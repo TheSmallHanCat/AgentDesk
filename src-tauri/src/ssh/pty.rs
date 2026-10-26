@@ -68,10 +68,14 @@ impl PtyManager {
                 .map_err(|e| AppError::io("pty", e))?;
             confirm(&mut channel, "pty-request", &mut initial).await?;
             channel
-                .exec(true, command)
+                .exec(true, "exec /bin/sh -s")
                 .await
                 .map_err(|e| AppError::io("pty", e))?;
-            confirm(&mut channel, "terminal-exec", &mut initial).await
+            confirm(&mut channel, "terminal-exec", &mut initial).await?;
+            channel
+                .data_bytes(command.into_bytes())
+                .await
+                .map_err(|e| AppError::io("terminal-exec", e))
         }
         .await;
         if let Err(error) = startup {
@@ -103,14 +107,33 @@ impl PtyManager {
             let mut tick = tokio::time::interval(Duration::from_millis(16));
             let mut exit_code = None;
             loop {
-                tokio::select! {biased;
-                    _=cancel.cancelled()=>break,
-                    input=rx.recv()=>match input {Some(Input::Data(data))=>{if channel.data_bytes(data.into_bytes()).await.is_err(){break;}},Some(Input::Resize(c,r))=>{if channel.window_change(c,r,0,0).await.is_err(){break;}},None=>break},
-                    _=tick.tick(),if !bytes.is_empty()=>{if !send(&output,&target,&terminal_id,&mut seq,&mut bytes,false,None,&window,&credits,&cancel).await{break;}},
-                    message=channel.wait()=>match message {
-                        Some(ChannelMsg::Data{data})|Some(ChannelMsg::ExtendedData{data,..})=>{bytes.extend_from_slice(&data);if bytes.len()>=32768&&!send(&output,&target,&terminal_id,&mut seq,&mut bytes,false,None,&window,&credits,&cancel).await{break;}},
-                        Some(ChannelMsg::ExitStatus{exit_status})=>exit_code=Some(exit_status),
-                        Some(ChannelMsg::Failure)|Some(ChannelMsg::Close)|None=>break,_=>{},
+                tokio::select! {
+                    biased;
+                    _ = cancel.cancelled() => break,
+                    input = rx.recv() => match input {
+                        Some(Input::Data(data)) => {
+                            if channel.data_bytes(data.into_bytes()).await.is_err() { break; }
+                        }
+                        Some(Input::Resize(cols, rows)) => {
+                            if channel.window_change(cols, rows, 0, 0).await.is_err() { break; }
+                        }
+                        None => break,
+                    },
+                    _ = tick.tick(), if !bytes.is_empty() => {
+                        if !send(&output, &target, &terminal_id, &mut seq, &mut bytes,
+                            false, None, &window, &credits, &cancel).await { break; }
+                    }
+                    message = channel.wait() => match message {
+                        Some(ChannelMsg::Data { data }) | Some(ChannelMsg::ExtendedData { data, .. }) => {
+                            bytes.extend_from_slice(&data);
+                            if bytes.len() >= 32768 && !send(&output, &target, &terminal_id,
+                                &mut seq, &mut bytes, false, None, &window, &credits, &cancel).await {
+                                break;
+                            }
+                        }
+                        Some(ChannelMsg::ExitStatus { exit_status }) => exit_code = Some(exit_status),
+                        Some(ChannelMsg::Failure) | Some(ChannelMsg::Close) | None => break,
+                        _ => {}
                     }
                 }
             }
@@ -130,6 +153,9 @@ impl PtyManager {
                 .await;
             }
             let _ = channel.close().await;
+            if let Ok(mut outstanding) = credits.lock() {
+                outstanding.clear();
+            }
             if let Ok(mut entries) = this.entries.lock() {
                 entries.remove(&terminal_id);
             }
@@ -179,7 +205,7 @@ impl PtyManager {
             t.credits
                 .lock()
                 .map_err(|e| AppError::io("pty", e))?
-                .remove(&seq);
+                .retain(|sent, _| *sent > seq);
         }
         Ok(())
     }
@@ -194,6 +220,10 @@ impl PtyManager {
                 ));
             }
             t.cancel.cancel();
+            t.credits
+                .lock()
+                .map_err(|e| AppError::io("pty", e))?
+                .clear();
             entries.remove(id);
         }
         Ok(())
@@ -203,12 +233,28 @@ impl PtyManager {
             entries.retain(|_, t| {
                 if t.target.connection_id == id {
                     t.cancel.cancel();
+                    if let Ok(mut credits) = t.credits.lock() {
+                        credits.clear();
+                    }
                     false
                 } else {
                     true
                 }
             });
         }
+    }
+    pub fn reset_frontend(&self) -> AppResult<()> {
+        let mut entries = self.entries.lock().map_err(|e| AppError::io("pty", e))?;
+        for terminal in entries.values() {
+            terminal.cancel.cancel();
+            terminal
+                .credits
+                .lock()
+                .map_err(|e| AppError::io("pty", e))?
+                .clear();
+        }
+        entries.clear();
+        Ok(())
     }
 }
 async fn confirm(
@@ -285,6 +331,9 @@ async fn send(
             })
             .is_err()
         {
+            if let Ok(mut map) = credits.lock() {
+                map.remove(seq);
+            }
             return false;
         }
         if last {
@@ -297,21 +346,99 @@ fn dimensions(cols: u32, rows: u32) -> (u32, u32) {
 }
 pub fn command(path: &str, kind: &str) -> AppResult<String> {
     let action = match kind {
-        "shell" => "exec \"${SHELL:-/bin/sh}\" -l",
-        "claude" => "exec claude",
-        "codex" => "exec codex",
+        "shell" => "exec \"$shell\" -l".to_owned(),
+        "claude" | "codex" => format!(
+            "case \"${{shell##*/}}\" in\n  csh|tcsh) exec \"$shell\" -ic 'exec {kind}' ;;\n  *) exec \"$shell\" -lic 'exec {kind}' ;;\nesac"
+        ),
         _ => return Err(AppError::new("E_INPUT", "pty", "Unknown terminal kind")),
     };
-    // A login, interactive shell loads nvm and shell rc configuration before starting the command.
-    let script = format!("cd -- {} || exit 1; {action}", quote(path));
+    // Only /bin/sh parses this script. The final interactive program remains the
+    // user's shell; csh/tcsh require -l to be used without a -c command.
     Ok(format!(
-        "exec \"${{SHELL:-/bin/sh}}\" -lic {}",
-        quote(&script)
+        "cd {} || exit 1\nshell=${{SHELL:-/bin/sh}}\n{action}\n",
+        quote(path)
     ))
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn cumulative_ack_recovers_a_full_window_after_lost_acknowledgements() {
+        let manager = PtyManager::default();
+        let target = Target {
+            connection_id: "connection".into(),
+            project_id: None,
+            session_id: None,
+            request_seq: 1,
+        };
+        let window = Arc::new(Semaphore::new(8));
+        let credits = Arc::new(Mutex::new(BTreeMap::new()));
+        for seq in 1..=8 {
+            let permit = window.clone().acquire_owned().await.unwrap();
+            credits.lock().unwrap().insert(seq, permit);
+        }
+        let (input, _) = mpsc::channel(1);
+        manager.entries.lock().unwrap().insert(
+            "terminal".into(),
+            Terminal {
+                target: target.clone(),
+                input,
+                cancel: CancellationToken::new(),
+                credits,
+            },
+        );
+        manager.ack(&target, "terminal", 8).unwrap();
+        assert_eq!(window.available_permits(), 8);
+        manager.ack(&target, "terminal", 8).unwrap();
+        assert_eq!(window.available_permits(), 8);
+    }
+    #[tokio::test]
+    async fn frontend_reset_closes_old_terminals_and_releases_all_credit() {
+        let manager = PtyManager::default();
+        let target = Target {
+            connection_id: "connection".into(),
+            project_id: None,
+            session_id: None,
+            request_seq: 1,
+        };
+        let window = Arc::new(Semaphore::new(1));
+        let credits = Arc::new(Mutex::new(BTreeMap::new()));
+        let permit = window.clone().acquire_owned().await.unwrap();
+        credits.lock().unwrap().insert(1, permit);
+        let cancel = CancellationToken::new();
+        let (input, _) = mpsc::channel(1);
+        manager.entries.lock().unwrap().insert(
+            "terminal".into(),
+            Terminal {
+                target: target.clone(),
+                input,
+                cancel: cancel.clone(),
+                credits: credits.clone(),
+            },
+        );
+        let mut other = target.clone();
+        other.connection_id = "other".into();
+        assert_eq!(
+            manager.ack(&other, "terminal", 1).unwrap_err().code,
+            "E_TARGET"
+        );
+        assert_eq!(window.available_permits(), 0);
+        manager.reset_frontend().unwrap();
+        assert!(cancel.is_cancelled());
+        assert!(manager.entries.lock().unwrap().is_empty());
+        assert!(credits.lock().unwrap().is_empty());
+        assert_eq!(window.available_permits(), 1);
+    }
+
+    #[test]
+    fn terminal_bootstrap_keeps_posix_syntax_out_of_the_login_shell() {
+        let script = command("/work/a' b/中文", "shell").unwrap();
+        assert!(script.starts_with("cd '/work/a'\\'' b/中文' || exit 1\n"));
+        assert!(script.contains("shell=${SHELL:-/bin/sh}"));
+        assert!(script.ends_with("exec \"$shell\" -l\n"));
+        let script = command("/work", "codex").unwrap();
+        assert!(script.contains("csh|tcsh) exec \"$shell\" -ic 'exec codex'"));
+    }
     #[test]
     fn terminal_commands_only_launch_known_programs() {
         assert!(command("/a' b", "codex").unwrap().contains("-lic"));

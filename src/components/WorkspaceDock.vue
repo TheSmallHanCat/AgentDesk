@@ -8,24 +8,340 @@ import { useDataStore } from '../stores/data'
 import { errorText } from '../utils/api'
 const TerminalView = defineAsyncComponent(() => import('./TerminalView.vue'))
 const CodeEditor = defineAsyncComponent(() => import('./CodeEditor.vue'))
-const { t }=useI18n();const store=useWorkspaceStore();const toast=useToastStore();const route=useRoute();const strip=ref<HTMLDivElement>()
-const shown=computed(()=>route.name==='workbench'&&store.dockOpen)
-const active=computed(()=>store.panes[store.activePane])
-const data=useDataStore()
-function connectionLabel(tab:WorkTab){const c=data.connections.find(c=>c.id===tab.target.connectionId);return c?`${c.name} · ${c.user}@${c.host}:${c.port}`:tab.target.connectionId}
-function split(){if(store.panes.length>=4)return;if(store.tabs.length<=store.panes.length){const current=store.tabs.find(t=>t.id===active.value);const project=data.projects.find(p=>p.id===current?.target.projectId);if(!project||!data.online(project.connectionId))return;const original=active.value;store.openTerminal(project,current?.type==='terminal'?current.kind:'shell',current?.path??project.path);const added=store.panes[store.activePane];store.panes[store.activePane]=original;store.panes.push(added);store.activePane=store.panes.length-1;store.focus=true;store.dockOpen=true}else store.split()}
-const grid=computed(()=>({gridTemplateColumns:store.panes.length>1?`${store.ratioX}% minmax(0,1fr)`:'minmax(0,1fr)',gridTemplateRows:store.panes.length>2?`${store.ratioY}% minmax(0,1fr)`:'minmax(0,1fr)'}))
-function paneStyle(tab:WorkTab){const n=store.panes.indexOf(tab.id);if(n<0)return{};if(store.panes.length===3&&n===0)return{gridColumn:'1',gridRow:'1 / 3'};if(store.panes.length===3)return{gridColumn:'2',gridRow:String(n)};return{gridColumn:String(n%2+1),gridRow:String(Math.floor(n/2)+1)}}
-async function close(tab:WorkTab){if(tab.type==='editor'&&tab.content!==tab.savedContent&&!window.confirm(`${t('editor.closeHelp')}\n\n${tab.path}`))return;if(tab.type==='terminal'&&!tab.exited&&!window.confirm(`${t('workbench.closeTerminal')}\n\n${tab.title} · ${tab.path}`))return;try{await store.closeTab(tab.id)}catch(e){toast.show(errorText(e),'error')}}
-let stopDrag:(()=>void)|undefined
-function drag(event:PointerEvent,axis:'x'|'y'|'height') {event.preventDefault();stopDrag?.();const container=(event.currentTarget as HTMLElement).parentElement!;const box=container.getBoundingClientRect();const startY=event.clientY;const startHeight=store.dockHeight
-  const move=(e:PointerEvent)=>{if(axis==='height')store.dockHeight=Math.max(180,Math.min(window.innerHeight-220,startHeight+startY-e.clientY));else if(axis==='x')store.ratioX=Math.max(20,Math.min(80,(e.clientX-box.left)/box.width*100));else store.ratioY=Math.max(20,Math.min(80,(e.clientY-box.top)/box.height*100))}
-  const stop=()=>{window.removeEventListener('pointermove',move);window.removeEventListener('pointerup',stop);document.body.style.userSelect='';stopDrag=undefined};stopDrag=stop;document.body.style.userSelect='none';window.addEventListener('pointermove',move);window.addEventListener('pointerup',stop,{once:true})
+const { t } = useI18n()
+const store = useWorkspaceStore()
+const toast = useToastStore()
+const route = useRoute()
+const strip = ref<HTMLDivElement>()
+const shown = computed(() => route.name === 'workbench' && store.dockOpen)
+const active = computed(() => store.panes[store.activePane])
+const data = useDataStore()
+function connectionLabel(tab: WorkTab) {
+  const c = data.connections.find((c) => c.id === tab.target.connectionId)
+  return c ? `${c.name} · ${c.user}@${c.host}:${c.port}` : tab.target.connectionId
 }
-watch(active,()=>requestAnimationFrame(()=>strip.value?.querySelector('[data-active="true"]')?.scrollIntoView({block:'nearest',inline:'nearest'})))
-watch(()=>store.closeRequested,()=>{const tab=store.tabs.find(t=>t.id===active.value);if(tab)void close(tab)})
-watch(()=>store.splitRequested,split)
-onUnmounted(()=>stopDrag?.())
+function hideDock() {
+  store.dockOpen = false
+  store.focus = false
+}
+function split() {
+  if (store.panes.length >= 4) return
+  if (store.tabs.length <= store.panes.length) {
+    const current = store.tabs.find((t) => t.id === active.value)
+    const project = data.projects.find((p) => p.id === current?.target.projectId)
+    if (!project || !data.online(project.connectionId)) return
+    const original = active.value
+    store.openTerminal(
+      project,
+      current?.type === 'terminal' ? current.kind : 'shell',
+      current?.path ?? project.path,
+    )
+    const added = store.panes[store.activePane]
+    store.panes[store.activePane] = original
+    store.panes.push(added)
+    store.activePane = store.panes.length - 1
+    store.focus = true
+    store.dockOpen = true
+  } else store.split()
+}
+const grid = computed(() => ({
+  gridTemplateColumns: store.panes.length > 1 ? `${store.ratioX}% minmax(0,1fr)` : 'minmax(0,1fr)',
+  gridTemplateRows: store.panes.length > 2 ? `${store.ratioY}% minmax(0,1fr)` : 'minmax(0,1fr)',
+}))
+function paneStyle(tab: WorkTab) {
+  const n = store.panes.indexOf(tab.id)
+  if (n < 0) return {}
+  if (store.panes.length === 3 && n === 0) return { gridColumn: '1', gridRow: '1 / 3' }
+  if (store.panes.length === 3) return { gridColumn: '2', gridRow: String(n) }
+  return { gridColumn: String((n % 2) + 1), gridRow: String(Math.floor(n / 2) + 1) }
+}
+async function close(tab: WorkTab) {
+  if (
+    tab.type === 'editor' &&
+    tab.content !== tab.savedContent &&
+    !window.confirm(`${t('editor.closeHelp')}\n\n${tab.path}`)
+  )
+    return
+  if (
+    tab.type === 'terminal' &&
+    !tab.exited &&
+    !window.confirm(`${t('workbench.closeTerminal')}\n\n${tab.title} · ${tab.path}`)
+  )
+    return
+  try {
+    await store.closeTab(tab.id)
+  } catch (e) {
+    toast.show(errorText(e), 'error')
+  }
+}
+let stopDrag: (() => void) | undefined
+function drag(event: PointerEvent, axis: 'x' | 'y' | 'height') {
+  event.preventDefault()
+  stopDrag?.()
+  const container = (event.currentTarget as HTMLElement).parentElement!
+  const box = container.getBoundingClientRect()
+  const startY = event.clientY
+  const startHeight = store.dockHeight
+  const move = (e: PointerEvent) => {
+    if (axis === 'height')
+      store.dockHeight = Math.max(
+        180,
+        Math.min(window.innerHeight - 220, startHeight + startY - e.clientY),
+      )
+    else if (axis === 'x')
+      store.ratioX = Math.max(20, Math.min(80, ((e.clientX - box.left) / box.width) * 100))
+    else store.ratioY = Math.max(20, Math.min(80, ((e.clientY - box.top) / box.height) * 100))
+  }
+  const stop = () => {
+    window.removeEventListener('pointermove', move)
+    window.removeEventListener('pointerup', stop)
+    document.body.style.userSelect = ''
+    stopDrag = undefined
+  }
+  stopDrag = stop
+  document.body.style.userSelect = 'none'
+  window.addEventListener('pointermove', move)
+  window.addEventListener('pointerup', stop, { once: true })
+}
+watch(active, () =>
+  requestAnimationFrame(() =>
+    strip.value
+      ?.querySelector('[data-active="true"]')
+      ?.scrollIntoView({ block: 'nearest', inline: 'nearest' }),
+  ),
+)
+watch(
+  () => store.closeRequested,
+  () => {
+    const tab = store.tabs.find((t) => t.id === active.value)
+    if (tab) void close(tab)
+  },
+)
+watch(() => store.splitRequested, split)
+onUnmounted(() => stopDrag?.())
 </script>
-<template><section v-show="shown" class="workspace-dock" :class="{focused:store.focus}" :style="store.focus?{}:{height:store.dockHeight+'px'}"><div v-if="!store.focus" class="dock-resize" role="separator" @pointerdown="drag($event,'height')"/><div class="dock-bar"><div ref="strip" class="tab-strip" role="tablist"><button v-for="tab in store.tabs" :key="tab.id" role="tab" :aria-selected="active===tab.id" :data-active="active===tab.id" :title="tab.target.connectionId+' · '+tab.path" @click="store.select(tab.id)"><span>{{ tab.type==='terminal'?'›_':'≡' }}</span>{{ tab.title }}{{ tab.type==='editor'&&tab.content!==tab.savedContent?' *':'' }}<span v-if="tab.type==='terminal'&&tab.exited"> · {{ t('workbench.exited') }}</span><span class="tab-close" role="button" tabindex="0" @keydown.enter.stop="close(tab)" @keydown.space.stop.prevent="close(tab)" :aria-label="t('workbench.closeTab')" @click.stop="close(tab)">×</span></button></div><div class="actions dock-actions"><n-button size="tiny" :disabled="store.panes.length>=4||!store.tabs.length" @click="split">{{ t('workbench.split') }}</n-button><n-button size="tiny" :disabled="store.panes.length<2" @click="store.unsplit">{{ t('workbench.unsplit') }}</n-button><n-button size="tiny" @click="store.focus=!store.focus">{{ t(store.focus?'workbench.back':'workbench.focus') }}</n-button><n-button size="tiny" :aria-label="t('common.close')" @click="store.dockOpen=false;store.focus=false">×</n-button></div></div><div class="dock-grid" :style="grid"><div v-for="tab in store.tabs" v-show="store.panes.includes(tab.id)" :key="tab.id" class="work-pane" :class="{active:active===tab.id}" :style="paneStyle(tab)" @focusin="store.activePane=store.panes.indexOf(tab.id)" @pointerdown="store.activePane=store.panes.indexOf(tab.id)"><div class="pane-target mono">{{ connectionLabel(tab) }} : {{ tab.path }}</div><TerminalView v-if="tab.type==='terminal'" :tab="tab" :visible="shown&&store.panes.includes(tab.id)"/><CodeEditor v-else :tab="tab" :visible="shown&&store.panes.includes(tab.id)"/></div><div v-if="!store.tabs.length" class="empty"><h2>{{ t('workbench.emptyTerminal') }}</h2><p>{{ t('workbench.emptyTerminalHelp') }}</p></div><div v-if="store.panes.length>1" class="split-resize vertical" role="separator" :style="{left:store.ratioX+'%'}" @pointerdown="drag($event,'x')"/><div v-if="store.panes.length>2" class="split-resize horizontal" role="separator" :style="{top:store.ratioY+'%',left:store.panes.length===3?store.ratioX+'%':'0'}" @pointerdown="drag($event,'y')"/></div></section></template>
-<style scoped>.workspace-dock{flex:none;display:flex;flex-direction:column;min-height:180px;position:relative;border-top:1px solid var(--border);background:var(--surface1)}.workspace-dock.focused{position:absolute;inset:40px 0 0 64px;z-index:20;height:auto}.dock-resize{position:absolute;left:0;right:0;top:-3px;height:6px;cursor:ns-resize;z-index:10}.dock-bar{display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--border);min-height:38px;padding-right:8px}.tab-strip{flex:1;display:flex;min-width:0;overflow-x:auto;scrollbar-width:thin}.tab-strip button{border:0;border-right:1px solid var(--border);border-bottom:2px solid transparent;display:flex;gap:8px;align-items:center;padding:9px 12px;white-space:nowrap;background:transparent;color:var(--muted);font-size:12px}.tab-strip button[data-active=true]{border-bottom-color:var(--primary);background:var(--surface2);color:var(--text)}.tab-close{font-size:15px;padding:0 3px}.dock-grid{flex:1;min-height:0;display:grid;position:relative;gap:1px;background:var(--border);overflow:hidden}.work-pane{min-width:0;min-height:0;display:flex;flex-direction:column;overflow:hidden;border:1px solid transparent;background:var(--surface1)}.work-pane.active{border-color:var(--primary)}.work-pane>:last-child{flex:1;min-height:0}.pane-target{padding:3px 8px;background:var(--surface2);font-size:10px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.split-resize{position:absolute;z-index:10}.vertical{top:0;bottom:0;width:6px;margin-left:-3px;cursor:col-resize}.horizontal{right:0;height:6px;margin-top:-3px;cursor:row-resize}.split-resize:hover{background:var(--primary)}@media(max-width:1179px){.dock-actions{gap:4px}.dock-bar{flex-wrap:wrap}.dock-actions{margin-left:auto;padding-bottom:3px}}</style>
+<template>
+  <section
+    v-show="shown"
+    class="workspace-dock"
+    :class="{ focused: store.focus }"
+    :style="store.focus ? {} : { height: store.dockHeight + 'px' }"
+  >
+    <div
+      v-if="!store.focus"
+      class="dock-resize"
+      role="separator"
+      @pointerdown="drag($event, 'height')"
+    />
+    <div class="dock-bar">
+      <div ref="strip" class="tab-strip" role="tablist">
+        <button
+          v-for="tab in store.tabs"
+          :key="tab.id"
+          role="tab"
+          :aria-selected="active === tab.id"
+          :data-active="active === tab.id"
+          :title="tab.target.connectionId + ' · ' + tab.path"
+          @click="store.select(tab.id)"
+        >
+          <span>{{ tab.type === 'terminal' ? '›_' : '≡' }}</span
+          >{{ tab.title }}{{ tab.type === 'editor' && tab.content !== tab.savedContent ? ' *' : ''
+          }}<span v-if="tab.type === 'terminal' && tab.exited"> · {{ t('workbench.exited') }}</span
+          ><span
+            class="tab-close"
+            role="button"
+            tabindex="0"
+            @keydown.enter.stop="close(tab)"
+            @keydown.space.stop.prevent="close(tab)"
+            :aria-label="t('workbench.closeTab')"
+            @click.stop="close(tab)"
+            >×</span
+          >
+        </button>
+      </div>
+      <div class="actions dock-actions">
+        <n-button
+          size="tiny"
+          :disabled="store.panes.length >= 4 || !store.tabs.length"
+          @click="split"
+          >{{ t('workbench.split') }}</n-button
+        ><n-button size="tiny" :disabled="store.panes.length < 2" @click="store.unsplit">{{
+          t('workbench.unsplit')
+        }}</n-button
+        ><n-button size="tiny" @click="store.focus = !store.focus">{{
+          t(store.focus ? 'workbench.back' : 'workbench.focus')
+        }}</n-button
+        ><n-button size="tiny" :aria-label="t('common.close')" @click="hideDock">×</n-button>
+      </div>
+    </div>
+    <div class="dock-grid" :style="grid">
+      <div
+        v-for="tab in store.tabs"
+        v-show="store.panes.includes(tab.id)"
+        :key="tab.id"
+        class="work-pane"
+        :class="{ active: active === tab.id }"
+        :style="paneStyle(tab)"
+        @focusin="store.activePane = store.panes.indexOf(tab.id)"
+        @pointerdown="store.activePane = store.panes.indexOf(tab.id)"
+      >
+        <div class="pane-target mono">{{ connectionLabel(tab) }} : {{ tab.path }}</div>
+        <TerminalView
+          v-if="tab.type === 'terminal'"
+          :tab="tab"
+          :visible="shown && store.panes.includes(tab.id)"
+        /><CodeEditor v-else :tab="tab" :visible="shown && store.panes.includes(tab.id)" />
+      </div>
+      <div v-if="!store.tabs.length" class="empty">
+        <h2>{{ t('workbench.emptyTerminal') }}</h2>
+        <p>{{ t('workbench.emptyTerminalHelp') }}</p>
+      </div>
+      <div
+        v-if="store.panes.length > 1"
+        class="split-resize vertical"
+        role="separator"
+        :style="{ left: store.ratioX + '%' }"
+        @pointerdown="drag($event, 'x')"
+      />
+      <div
+        v-if="store.panes.length > 2"
+        class="split-resize horizontal"
+        role="separator"
+        :style="{
+          top: store.ratioY + '%',
+          left: store.panes.length === 3 ? store.ratioX + '%' : '0',
+        }"
+        @pointerdown="drag($event, 'y')"
+      />
+    </div>
+  </section>
+</template>
+<style scoped>
+.workspace-dock {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  min-height: 180px;
+  position: relative;
+  border-top: 1px solid var(--border);
+  background: var(--surface1);
+}
+.workspace-dock.focused {
+  position: absolute;
+  inset: 40px 0 0 64px;
+  z-index: 20;
+  height: auto;
+}
+.dock-resize {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -3px;
+  height: 6px;
+  cursor: ns-resize;
+  z-index: 10;
+}
+.dock-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid var(--border);
+  min-height: 38px;
+  padding-right: 8px;
+}
+.tab-strip {
+  flex: 1;
+  display: flex;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+.tab-strip button {
+  border: 0;
+  border-right: 1px solid var(--border);
+  border-bottom: 2px solid transparent;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 9px 12px;
+  white-space: nowrap;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+}
+.tab-strip button[data-active='true'] {
+  border-bottom-color: var(--primary);
+  background: var(--surface2);
+  color: var(--text);
+}
+.tab-close {
+  font-size: 15px;
+  padding: 0 3px;
+}
+.dock-grid {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  position: relative;
+  gap: 1px;
+  background: var(--border);
+  overflow: hidden;
+}
+.work-pane {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid transparent;
+  background: var(--surface1);
+}
+.work-pane.active {
+  border-color: var(--primary);
+}
+.work-pane > :last-child {
+  flex: 1;
+  min-height: 0;
+}
+.pane-target {
+  padding: 3px 8px;
+  background: var(--surface2);
+  font-size: 10px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.split-resize {
+  position: absolute;
+  z-index: 10;
+}
+.vertical {
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  margin-left: -3px;
+  cursor: col-resize;
+}
+.horizontal {
+  right: 0;
+  height: 6px;
+  margin-top: -3px;
+  cursor: row-resize;
+}
+.split-resize:hover {
+  background: var(--primary);
+}
+@media (max-width: 1179px) {
+  .dock-actions {
+    gap: 4px;
+  }
+  .dock-bar {
+    flex-wrap: wrap;
+  }
+  .dock-actions {
+    margin-left: auto;
+    padding-bottom: 3px;
+  }
+}
+</style>
