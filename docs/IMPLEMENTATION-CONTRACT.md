@@ -19,7 +19,7 @@ M0/M1 的历史约束仅适用于相应阶段。M2 扩展以 `docs/M2-CONTRACT.m
 - `FileDocument { path, content, mtime: number, size: number, permissions: number, lineEnding: 'lf'|'crlf'|'mixed', saveMode?: 'atomic'|'inPlace' }`
 - `TerminalFrame { target, terminalId, data: number[], seq: number, exited: boolean, exitCode?: number }`。数据为字节，避免切断 UTF-8；16ms 或 32KiB 批量。最多 8 个未确认帧，前端写入后 ack。
 - `Transfer { id, target, path, destination, localPath?: string, state: 'queued'|'running'|'completed'|'failed'|'cancelled', transferred: number, total: number, speed: number, error?: string }`。destination 保留下载目录供重试使用，localPath 是成功后的实际文件名。
-- `Diagnostic { connectionId, stage, elapsedMs: number, success: boolean, code?: string, timestamp: number }`，不记录地址、用户名、路径和错误 payload。
+- `Diagnostic { connectionId, stage, elapsedMs: number, success: boolean, code?: string, timestamp: number, exitCode?: number, stderrTail?: string }`，不记录地址、用户名、路径和错误 payload。安装失败的 stderrTail 仅包含尾部白名单错误类别，未知文本替换为 `[redacted]`，不保存原始 stderr。
 - `Settings { theme: 'system'|'light'|'dark', language: 'zh-CN'|'en', closeAction: 'ask'|'tray'|'exit', scrollback: number, fontSize: number, notifications: { disconnected: boolean, completed: boolean, approval: boolean }, shortcuts: { newTerminal: string, saveFile: string, focusDock: string, closeTab: string, nextTab: string, previousTab: string, split: string } }`
 
 ## invoke

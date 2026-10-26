@@ -1,6 +1,6 @@
 # Host 协议
 
-`hello.schema.json` 定义握手和目标；`m2.schema.json` 定义 M2 会话、运行、事件、审批、补取和 blob 类型。`x-methods` 给出首版方法的参数与结果引用；M3/P1 方法仅声明协议并返回 `E_CAPABILITY`。
+`hello.schema.json` 定义握手、目标与 Agent 能力；`m2.schema.json` 定义会话、运行、事件、审批、补取、blob、登录与 M3 设备通道。`x-methods` 给出方法的参数与结果引用；尚未实现的 P1 方法返回 `E_CAPABILITY`。`device.project.enable/revoke` 显式管理 Host 的项目授权；`device.offline` 可携带 generation，避免迟到清理影响新注册。Agent 名单、显示名与原生终端入口来自能力上报。
 
 ```bash
 python protocol/generate.py

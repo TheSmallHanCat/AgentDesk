@@ -120,3 +120,21 @@ python scripts/smoke_login.py --url http://127.0.0.1:1420
 `smoke_login_native.py` 使用隔离桌面目录、固定主机指纹与 `agentdesk-test`，真实点击环境页登录/取消；检查 Claude 链接/回填、Codex 设备码/链接、进程结束、凭据文件元数据不变、Host/桌面日志和 SQLite 及诊断记录无链接/代码。`--deploy` 通过产品 Installer 更新专用 Host；重跑已部署版本可省略。不会打开授权页面、完成授权、读取凭据、截图登录提示或发送模型请求。结果仅含布尔值、计数与安全错误码，保存 `.tmp/e2e/task05-native-login.json`。
 
 离线 `smoke_login.py` 使用测试 IPC fixture 覆盖三处入口、复制、回填、成功/失败/过期、原始输出兜底、取消、切目标、断线、确认退出和浏览器 Storage 清理。真实诊断导出函数的落盘扫描另由 Rust `login_notifications_are_live_only_and_do_not_reach_diagnostics_or_sqlite` 覆盖；原生脚本检查诊断记录，不驱动系统保存对话框。
+
+## 任务 06：M3 独立审查与安装失败恢复
+
+```bash
+python scripts/build_host_resources.py
+cargo test --locked --manifest-path src-tauri/Cargo.toml --test real_install_review -- --ignored --nocapture --test-threads=1
+# 上条完成后再运行反向通道，避免升级正在使用的 Host。
+AGENTDESK_E2E_SSH_CLIENT=1 cargo test --locked --manifest-path src-tauri/Cargo.toml --test real_device -- --ignored --nocapture --test-threads=1
+python scripts/e2e_host_tests.py
+python scripts/smoke_m3_review.py --url http://127.0.0.1:1420
+python scripts/smoke_m3_native.py
+```
+
+`real_install_review` 通过环境页使用的同一安装/恢复编排执行 10 次完整安装升级、20 次回滚，并注入激活前/后失败，核对原版本链接和运行状态恢复。新诊断只保留固定阶段、退出码和 stderr 尾部的白名单错误类别，未知文本替换为 `[redacted]`。不打印原始日志或秘密。
+
+`real_device` 增加黑洞旧控制连接后立即接管注册、本机 Claude/Codex plan 明确拒绝、原始 Codex read-only 设备入口实测、单项目撤销和最后项目密钥删除；原有 60 秒等待、300 秒宽限期与资源回收保持真实时长。`smoke_m3_native` 增加真实界面撤销后桌面 send/append 拒绝；浏览器 `smoke_m3_review` 用隔离 IPC fixture 验证安全提示、撤销按钮、plan 禁选和能力上报中的新增 Agent。
+
+Windows 另外执行 `runner_command_works_with_cmd_and_powershell_default_shells` 和 `first_instruction_child_is_owned_by_the_job` 的 ignored 用例，均带 `--lib -- --ignored --nocapture`；分别模拟 cmd/PowerShell DefaultShell 的实际命令调用以及启动首条指令创建的子进程回收。不修改真实注册表。不要在真实 WebView 运行时执行会重新链接 `agentdesk.exe` 的 Cargo 命令。
