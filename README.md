@@ -63,7 +63,7 @@ docs/          接口约定、问题与进度报告
 
 连接和远端项目索引保存在 `desktop.sqlite`；设置为 `settings.json`；应用独立管理 `known_hosts` 并只读系统的 `~/.ssh/known_hosts`。M1 的远端项目索引先保存在桌面，M2 再设计迁移到 Host。诊断日志有大小上限，仅含连接 ID、阶段、耗时和错误码，不记录凭据、终端输出或项目内容。凭据保存在系统 keyring，自动重连所需的临时凭据只在进程内存中保留，主动断开后释放。
 
-支持状态、实际测试数量、真实服务器验收项与已知限制见 [本次进度报告](docs/progress/01-M0-M1.md)。本地 SSH 测试服务只监听回环地址、每次生成临时主机密钥，不依赖用户账号。
+初始交付见 [任务 01 报告](docs/progress/01-M0-M1.md)，审查修复与真实环境结果见 [任务 02 报告](docs/progress/02-fix-and-e2e.md)。可重复验收入口见 [E2E 说明](scripts/E2E.md)。本地 SSH 测试服务只监听回环地址、每次生成临时主机密钥，不依赖用户账号。
 
 浏览器验证脚本需要额外安装 Playwright 和 Chromium；启动 `pnpm dev --host 127.0.0.1` 后，可运行 `python scripts/smoke_ui.py` 与 `python scripts/smoke_workbench.py`。后者使用测试专属 IPC 数据，不连接外网。构建 Windows debug 程序后，`python scripts/smoke_native.py` 使用隔离数据目录验证真实 WebView 与 IPC；截图写入被忽略的 `test-results/`。日常 `pnpm test` 不需要 Playwright。
 
