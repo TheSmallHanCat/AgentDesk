@@ -13,14 +13,17 @@ MAX_FRAME = 4 * 1024 * 1024
 
 
 async def close_process(process: asyncio.subprocess.Process) -> None:
-    if process.returncode is None:
+    if os.name == "posix":
         try:
-            if os.name == "posix":
-                os.killpg(process.pid, signal.SIGTERM)
-            else:
-                process.terminate()
+            os.killpg(process.pid, signal.SIGTERM)
         except ProcessLookupError:
             pass
+    elif process.returncode is None:
+        try:
+            process.terminate()
+        except ProcessLookupError:
+            pass
+    if process.returncode is None:
         try:
             await asyncio.wait_for(process.wait(), 5)
         except TimeoutError:
@@ -32,6 +35,13 @@ async def close_process(process: asyncio.subprocess.Process) -> None:
             except ProcessLookupError:
                 pass
             await asyncio.wait_for(process.wait(), 5)
+    if os.name == "posix":
+        # The leader can exit before a tool process; its descendants still own
+        # the reserved process-group id and must not survive transport cleanup.
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
 
 
 async def command(arguments: list[str], timeout: float = 20) -> tuple[int, bytes]:

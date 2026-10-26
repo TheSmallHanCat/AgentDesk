@@ -10,6 +10,7 @@ from agentdesk_host.adapters.base import AdapterError, RunContext, RunHandle
 from agentdesk_host.adapters.codex import CodexAdapter
 from agentdesk_host.adapters.claude import ClaudeAdapter
 from agentdesk_host.adapters.native_rpc import NativeRpc
+from agentdesk_host.adapters.native_common import close_process
 
 
 def test_stdio_handshake_server_request_interleaving_and_disconnect(tmp_path):
@@ -85,4 +86,22 @@ def test_unlogged_start_never_spawns_turn(factory, monkeypatch, tmp_path):
         with pytest.raises(AdapterError) as error:
             await adapter.start_run({"path":str(tmp_path)}, {"text":"must not be sent"}, None)
         assert error.value.code=="E_NOT_LOGGED_IN"
+    asyncio.run(check())
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Process-group descendant verification requires Linux /proc")
+def test_cleanup_kills_tool_descendants_after_native_leader_exits():
+    async def check():
+        child_code="import signal,time; signal.signal(signal.SIGTERM,signal.SIG_IGN); time.sleep(60)"
+        leader_code="import subprocess,sys; p=subprocess.Popen([sys.executable,'-c',"+repr(child_code)+"],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL); print(p.pid,flush=True)"
+        leader=await asyncio.create_subprocess_exec(sys.executable,'-c',leader_code,stdout=asyncio.subprocess.PIPE,start_new_session=True)
+        child_pid=int(await leader.stdout.readline())
+        await asyncio.wait_for(leader.wait(),5)
+        await close_process(leader)
+        status=Path('/proc')/str(child_pid)/'stat'
+        for _ in range(100):
+            if not status.exists() or status.read_text().split()[2]=='Z':
+                break
+            await asyncio.sleep(0.01)
+        assert not status.exists() or status.read_text().split()[2]=='Z'
     asyncio.run(check())
