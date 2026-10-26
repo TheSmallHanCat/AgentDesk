@@ -74,9 +74,14 @@ async fn recover_host(
     if let Some(client) = &client {
         prepare_shutdown(client).await?;
     }
+    state.hosts.disconnect(&target.connection_id).await;
     let recovered = state
         .ssh
-        .exec(target, &restore_script(before, expected, restart_fake))
+        .exec_stage(
+            target,
+            "install.recover",
+            &restore_script(before, expected, restart_fake),
+        )
         .await;
     if let Some(client) = client {
         let _ = client.request("host.cancelShutdown", json!({})).await;
@@ -224,9 +229,35 @@ pub async fn env_install_run(
     plan_id: String,
     on_progress: tauri::ipc::Channel<Value>,
 ) -> AppResult<Reply<Value>> {
+    Ok(target.reply(install_host(&state, target.clone(), plan_id, on_progress).await?))
+}
+
+pub async fn install_host(
+    state: &AppState,
+    target: Target,
+    plan_id: String,
+    on_progress: tauri::ipc::Channel<Value>,
+) -> AppResult<Value> {
     state.ssh.validate_target(&target)?;
     // take registers cancellation before the first asynchronous preflight.
-    let mut plan = state.installer.take(&target, &plan_id)?;
+    let plan = state.installer.take(&target, &plan_id)?;
+    execute_host_install(state, target, plan, on_progress).await
+}
+fn recovery_error(mut original: AppError, recovery: AppError) -> AppError {
+    let mut details = original.details.take().unwrap_or_else(|| json!({}));
+    details["recoveryCode"] = json!(recovery.code);
+    details["recoveryStage"] = json!(recovery.stage);
+    details["hint"] = json!("Host recovery failed; inspect the retained versions before retrying");
+    original.with_details(details)
+}
+
+pub async fn execute_host_install(
+    state: &AppState,
+    target: Target,
+    mut plan: crate::host::installer::InstallPlan,
+    on_progress: tauri::ipc::Channel<Value>,
+) -> AppResult<Value> {
+    let plan_id = plan.value["planId"].as_str().unwrap().to_owned();
     let mut before = None;
     let mut old_client = None;
     let mut previous_fake = false;
@@ -241,13 +272,13 @@ pub async fn env_install_run(
         let snapshot = snapshot_script(false);
         let links = tokio::select! {
             _=plan.cancel.cancelled()=>return Err(install_cancelled()),
-            output=state.ssh.exec(&target,&snapshot)=>HostLinks::parse(&output?)?,
+            output=state.ssh.exec_stage(&target,"install.snapshot",&snapshot)=>HostLinks::parse(&output?)?,
         };
         before = Some(links.clone());
         plan.before = Some(links);
         old_client = tokio::select! {
             _=plan.cancel.cancelled()=>return Err(install_cancelled()),
-            client=host_or_inactive(&state,&target)=>client?,
+            client=host_or_inactive(state,&target)=>client?,
         };
         if let Some(client) = &old_client {
             previous_fake = has_fake(client)?;
@@ -256,7 +287,7 @@ pub async fn env_install_run(
                 result=prepare_shutdown(client)=>result?,
             };
             let observed =
-                HostLinks::parse(&state.ssh.exec(&target, &snapshot_script(false)).await?)?;
+                HostLinks::parse(&state.ssh.exec_stage(&target, "install.snapshot", &snapshot_script(false)).await?)?;
             if Some(&observed) != before.as_ref() {
                 return Err(AppError::new(
                     "E_CONFLICT",
@@ -267,8 +298,8 @@ pub async fn env_install_run(
             recovery_needed = true;
             // Finish STOP even if cancellation arrives during its execution.
             // Recovery then restarts the original version deterministically.
-            state.ssh.exec(&target, STOP_SCRIPT).await?;
             state.hosts.disconnect(&target.connection_id).await;
+            state.ssh.exec_stage(&target, "install.stop", STOP_SCRIPT).await?;
         }
         plan.check_cancelled()?;
         recovery_needed = true;
@@ -276,10 +307,10 @@ pub async fn env_install_run(
             .installer
             .execute_prepared(&state.ssh, &target, &plan, &on_progress)
             .await?;
-        state.ssh.exec(&target, &start_script(fake)).await?;
+        state.ssh.exec_stage(&target, "install.start", &start_script(fake)).await?;
         let client = state.hosts.client(&state.ssh, &state.db, &target).await?;
         client.request("env.probe", json!({})).await?;
-        let current = HostLinks::parse(&state.ssh.exec(&target, &snapshot_script(false)).await?)?;
+        let current = HostLinks::parse(&state.ssh.exec_stage(&target, "install.snapshot", &snapshot_script(false)).await?)?;
         if current.current.as_deref() != Some(expected.as_str()) {
             return Err(AppError::new(
                 "E_CONFLICT",
@@ -295,16 +326,24 @@ pub async fn env_install_run(
     }
     let result = match operation {
         Err(error) if recovery_needed => {
-            match recover_host(&state,&target,before.as_ref().unwrap(),&expected,old_client.is_some().then_some(previous_fake)).await {
-                Ok(())=>Err(error),
-                Err(recovery)=>Err(error.with_details(json!({"recoveryCode":recovery.code,"recoveryStage":recovery.stage,"hint":"Host recovery failed; inspect the retained versions before retrying"}))),
+            match recover_host(
+                state,
+                &target,
+                before.as_ref().unwrap(),
+                &expected,
+                old_client.is_some().then_some(previous_fake),
+            )
+            .await
+            {
+                Ok(()) => Err(error),
+                Err(recovery) => Err(recovery_error(error, recovery)),
             }
         }
         other => other,
     };
     state.installer.finish(&plan_id);
     let _ = on_progress.send(json!({"target":target,"done":true,"success":result.is_ok()}));
-    Ok(target.reply(result?))
+    result.map_err(|error| state.ssh.install_error(&target, error))
 }
 #[tauri::command]
 pub fn env_install_cancel(
@@ -324,7 +363,11 @@ pub async fn host_start(
 ) -> AppResult<Reply<Value>> {
     state
         .ssh
-        .exec(&target, &start_script(fake_agent.unwrap_or(false)))
+        .exec_stage(
+            &target,
+            "host.start",
+            &start_script(fake_agent.unwrap_or(false)),
+        )
         .await?;
     let client = state.hosts.client(&state.ssh, &state.db, &target).await?;
     let hello = client
@@ -341,7 +384,12 @@ pub async fn host_stop(state: tauri::State<'_, AppState>, target: Target) -> App
     if let Some(client) = &client {
         prepare_shutdown(client).await?;
     }
-    if let Err(error) = state.ssh.exec(&target, STOP_SCRIPT).await {
+    state.hosts.disconnect(&target.connection_id).await;
+    if let Err(error) = state
+        .ssh
+        .exec_stage(&target, "install.stop", STOP_SCRIPT)
+        .await
+    {
         if let Some(client) = client {
             let _ = client.request("host.cancelShutdown", json!({})).await;
         }
@@ -365,10 +413,23 @@ pub async fn host_rollback(
     target: Target,
     fake_agent: Option<bool>,
 ) -> AppResult<Reply<Value>> {
+    Ok(target.reply(rollback_host(&state, target.clone(), fake_agent).await?))
+}
+
+pub async fn rollback_host(
+    state: &AppState,
+    target: Target,
+    fake_agent: Option<bool>,
+) -> AppResult<Value> {
     state.ssh.validate_target(&target)?;
     // Validate the retained executable before touching the running Host.
-    let before = HostLinks::parse(&state.ssh.exec(&target, &snapshot_script(true)).await?)?;
-    let old_client = host_or_inactive(&state, &target).await?;
+    let before = HostLinks::parse(
+        &state
+            .ssh
+            .exec_stage(&target, "rollback.snapshot", &snapshot_script(true))
+            .await?,
+    )?;
+    let old_client = host_or_inactive(state, &target).await?;
     let previous_fake = old_client
         .as_ref()
         .map(has_fake)
@@ -379,7 +440,7 @@ pub async fn host_rollback(
     }
     let observed = state
         .ssh
-        .exec(&target, &snapshot_script(true))
+        .exec_stage(&target, "rollback.snapshot", &snapshot_script(true))
         .await
         .and_then(|output| HostLinks::parse(&output));
     if observed.as_ref().ok() != Some(&before) {
@@ -395,15 +456,22 @@ pub async fn host_rollback(
         }));
     }
     let result = async {
-        state.ssh.exec(&target, STOP_SCRIPT).await?;
         state.hosts.disconnect(&target.connection_id).await;
         state
             .ssh
-            .exec(&target, &rollback_script_for(&before))
+            .exec_stage(&target, "install.stop", STOP_SCRIPT)
             .await?;
         state
             .ssh
-            .exec(&target, &start_script(fake_agent.unwrap_or(false)))
+            .exec_stage(&target, "rollback.activate", &rollback_script_for(&before))
+            .await?;
+        state
+            .ssh
+            .exec_stage(
+                &target,
+                "host.start",
+                &start_script(fake_agent.unwrap_or(false)),
+            )
             .await?;
         let client = state.hosts.client(&state.ssh, &state.db, &target).await?;
         client.request("env.probe", json!({})).await
@@ -413,11 +481,19 @@ pub async fn host_rollback(
         let _ = client.request("host.cancelShutdown", json!({})).await;
     }
     match result {
-        Ok(probe)=>Ok(target.reply(probe)),
-        Err(error)=>match recover_host(&state,&target,&before,before.previous.as_deref().unwrap(),old_client.is_some().then_some(previous_fake)).await{
-            Ok(())=>Err(error),
-            Err(recovery)=>Err(error.with_details(json!({"recoveryCode":recovery.code,"recoveryStage":recovery.stage,"hint":"Rollback recovery failed; inspect the retained versions"}))),
-        }
+        Ok(probe) => Ok(probe),
+        Err(error) => match recover_host(
+            state,
+            &target,
+            &before,
+            before.previous.as_deref().unwrap(),
+            old_client.is_some().then_some(previous_fake),
+        )
+        .await
+        {
+            Ok(()) => Err(error),
+            Err(recovery) => Err(recovery_error(error, recovery)),
+        },
     }
 }
 #[cfg(test)]

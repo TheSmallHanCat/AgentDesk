@@ -13,6 +13,7 @@ use std::{
 };
 use tokio::io::AsyncWriteExt;
 use tokio_util::sync::CancellationToken;
+use zeroize::Zeroizing;
 
 #[derive(Clone)]
 pub struct InstallPlan {
@@ -202,6 +203,7 @@ impl Installer {
         plan.check_cancelled()?;
         self.execute_inner(ssh, target, plan, progress, &plan.cancel)
             .await
+            .map_err(|error| ssh.install_error(target, error))
     }
     async fn execute_inner(
         &self,
@@ -212,8 +214,9 @@ impl Installer {
         cancel: &CancellationToken,
     ) -> AppResult<Value> {
         let q = sftp::quote(&plan.stage);
-        ssh.exec(
+        ssh.exec_stage(
             target,
+            "install.staging",
             &format!("set -eu\numask 077\nmkdir -p \"$HOME/.agentdesk/host/staging\"\nmkdir {q}"),
         )
         .await?;
@@ -285,10 +288,11 @@ impl Installer {
             .await
             .map_err(|e| AppError::io("env.install", e))?;
         let script = format!("set +m\numask 077\nsetsid /bin/sh {q}/install.sh </dev/null &\npid=$!\nprintf '%s' \"$pid\" >{q}/install.pid\ntrap 'kill -TERM -- -\"$pid\" 2>/dev/null || true' HUP TERM EXIT\nwait \"$pid\"\nstatus=$?\ntrap - HUP TERM EXIT\nexit \"$status\"\n");
+        let mut diagnostic = InstallOutput::default();
+        let mut exit = None;
         let result = tokio::time::timeout(Duration::from_secs(900), async {
             channel.data_bytes(script.into_bytes()).await.map_err(|e|AppError::io("env.install",e))?;
             channel.eof().await.map_err(|e|AppError::io("env.install",e))?;
-            let mut exit = None;
             let mut emitted = 0usize;
             let mut prepared=PreparedMarker::new(plan.value["planId"].as_str().unwrap());
             let mut committed=false;
@@ -296,7 +300,13 @@ impl Installer {
                 tokio::select! {
                     _ = cancel.cancelled() => return Err(AppError::new("E_CANCELLED", "env.install", "Installation cancelled")),
                     message = channel.wait() => match message {
-                        Some(ChannelMsg::Data { data }) | Some(ChannelMsg::ExtendedData { data, .. }) => {
+                        Some(ChannelMsg::ExtendedData { data, .. }) => {
+                            diagnostic.stderr.extend_from_slice(&data);
+                            let excess = diagnostic.stderr.len().saturating_sub(4096);
+                            diagnostic.stderr.drain(..excess);
+                        }
+                        Some(ChannelMsg::Data { data }) => {
+                            diagnostic.push(&data);
                             emitted += data.len();
                             if emitted > 2 * 1024 * 1024 { return Err(AppError::new("E_LIMIT", "env.install", "Installation log exceeded its limit")); }
                             progress.send(json!({"target":target,"message":String::from_utf8_lossy(&data),"done":false})).map_err(|e| AppError::io("env.progress", e))?;
@@ -304,7 +314,7 @@ impl Installer {
                                 self.enter_commit(plan.value["planId"].as_str().unwrap())?;
                                 // The state transition and cancel share one mutex. Once
                                 // committing wins, cancel reports E_COMMITTING.
-                                ssh.exec(target,&format!("set -eu\ntest -f {q}/prepared && test ! -f {q}/cancel\n: >{q}/commit")).await?;
+                                ssh.exec_stage(target,"install.commit",&format!("set -eu\ntest -f {q}/prepared && test ! -f {q}/cancel\n: >{q}/commit")).await?;
                                 committed=true;
                             }
                         }
@@ -318,11 +328,22 @@ impl Installer {
             if exit != Some(0) || !committed { return Err(AppError::new("E_INSTALL", "env.install", format!("Installation failed (status {exit:?})"))); }
             Ok(plan.value.clone())
         }).await.map_err(|_| AppError::new("E_TIMEOUT", "env.install", "Installation exceeded 15 minutes")).and_then(|r| r);
+        let result = result.map_err(|mut error| {
+            if error.details.is_none() {
+                error.stage = format!("install.{}", diagnostic.stage);
+                // Record through the shared SSH diagnostic path without retaining
+                // arbitrary stderr or artifact contents.
+                error.details = Some(serde_json::json!({"installStage":error.stage,"exitCode":exit,"stderrTail":crate::session_log::sanitized_install_tail(&diagnostic.stderr)}));
+                ssh.record_install_failure(target, &error, exit, &diagnostic.stderr);
+            }
+            error
+        });
         let _ = channel.close().await;
         if result.is_err() {
             // Inspect only our unique install script identity before killing its group.
             let cleanup = format!("test ! -d {q} || : >{q}/cancel\nif test -f {q}/install.pid; then pid=$(cat {q}/install.pid); case \"$pid\" in ''|*[!0-9]*) exit 1;; esac; if test -r /proc/\"$pid\"/cmdline && tr '\\0' '\\n' </proc/\"$pid\"/cmdline | grep -Fx -- {q}/install.sh >/dev/null; then kill -TERM -- -\"$pid\" 2>/dev/null || true; sleep 1; kill -KILL -- -\"$pid\" 2>/dev/null || true; fi; fi");
-            ssh.exec(target, &cleanup).await?;
+            // Cleanup failure must not hide the original failing phase.
+            let _ = ssh.exec_stage(target, "install.cleanup", &cleanup).await;
         }
         result
     }
@@ -385,6 +406,59 @@ struct PreparedMarker {
     marker: Vec<u8>,
     tail: Vec<u8>,
 }
+struct InstallOutput {
+    stage: String,
+    tail: Vec<u8>,
+    stderr: Zeroizing<Vec<u8>>,
+}
+impl Default for InstallOutput {
+    fn default() -> Self {
+        Self {
+            stage: "launch".into(),
+            tail: Vec::new(),
+            stderr: Zeroizing::new(Vec::new()),
+        }
+    }
+}
+impl InstallOutput {
+    fn push(&mut self, data: &[u8]) {
+        self.tail.extend_from_slice(data);
+        for line in self.tail.split(|c| *c == b'\n') {
+            if let Some(stage) = line.strip_prefix(b"AGENTDESK_STAGE:") {
+                if let Ok(stage) = std::str::from_utf8(stage) {
+                    if [
+                        "platform",
+                        "prepare.paths",
+                        "uv.download",
+                        "uv.extract",
+                        "python.install",
+                        "venv.create",
+                        "dependencies.install",
+                        "host.install",
+                        "codex.download",
+                        "bwrap.download",
+                        "codex.extract",
+                        "host.import",
+                        "codex.version",
+                        "codex.sandbox",
+                        "prepare.wait",
+                        "activate.links",
+                    ]
+                    .contains(&stage)
+                    {
+                        self.stage = stage.into();
+                    }
+                }
+            }
+        }
+        if let Some(end) = self.tail.iter().rposition(|c| *c == b'\n') {
+            self.tail.drain(..=end);
+        }
+        if self.tail.len() > 128 {
+            self.tail.clear();
+        }
+    }
+}
 impl PreparedMarker {
     fn new(id: &str) -> Self {
         Self {
@@ -444,8 +518,8 @@ if test -r "$base/run/host.pid"; then
   if test -r /proc/"$pid"/cmdline && tr '\0' '\n' </proc/"$pid"/cmdline | grep -Fx agentdesk_host >/dev/null; then
     if timeout 5 systemctl --user is-active agentdesk-host.service >/dev/null 2>&1; then systemctl --user stop agentdesk-host.service; else kill -TERM "$pid"; fi
     i=0
-    while test -S "$base/run/host.sock" && test "$i" -lt 300; do sleep 0.1; i=$((i+1)); done
-    test ! -S "$base/run/host.sock"
+    while { test -S "$base/run/host.sock" || test -r "$base/run/host.pid"; } && test "$i" -lt 300; do sleep 0.1; i=$((i+1)); done
+    test ! -S "$base/run/host.sock" && test ! -r "$base/run/host.pid"
   fi
 fi
 "#;
@@ -577,6 +651,15 @@ pub fn rollback_script_for(links: &HostLinks) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn phase_diagnostics_accept_only_known_names_across_transport_chunks() {
+        let mut output = InstallOutput::default();
+        output.push(b"AGENTDESK_STA");
+        output.push(b"GE:codex.sandbox\n");
+        assert_eq!(output.stage, "codex.sandbox");
+        output.push(b"AGENTDESK_STAGE:credential-fixture\n");
+        assert_eq!(output.stage, "codex.sandbox");
+    }
     fn target(connection: &str) -> Target {
         Target {
             device_local: false,

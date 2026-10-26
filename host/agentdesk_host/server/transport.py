@@ -130,12 +130,15 @@ class HostServer:
     async def close(self) -> None:
         if self.server:
             self.server.close()
-            await self.server.wait_closed()
         for writer in tuple(self.writers):
             writer.close()
         for task in tuple(self.connections):
             task.cancel()
         if self.connections:
             await asyncio.gather(*tuple(self.connections), return_exceptions=True)
+        if self.server:
+            # Python 3.12 waits for active transports as well as the listener.
+            # Close/cancel clients before awaiting this barrier.
+            await self.server.wait_closed()
         if self.socket_path.is_socket():
             self.socket_path.unlink()

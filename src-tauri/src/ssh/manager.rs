@@ -648,57 +648,123 @@ impl SshManager {
         .map_err(|e| AppError::io("host.socket", e))
     }
     pub async fn exec(&self, target: &Target, command: &str) -> AppResult<Vec<u8>> {
-        let mut channel = self.open_channel(target).await?;
-        channel
-            .exec(true, "exec /bin/sh -s")
-            .await
-            .map_err(|e| AppError::io("exec", e))?;
-        channel
-            .data_bytes([command.as_bytes(), b"\n"].concat())
-            .await
-            .map_err(|e| AppError::io("exec", e))?;
-        channel.eof().await.map_err(|e| AppError::io("exec", e))?;
-        let result = tokio::time::timeout(Duration::from_secs(60), async {
-            let mut output = Vec::new();
-            let mut status = None;
-            while let Some(message) = channel.wait().await {
-                match message {
-                    ChannelMsg::Data { data } => {
-                        if output.len() + data.len() > 4 * 1024 * 1024 {
-                            return Err(AppError::new(
-                                "E_LIMIT",
-                                "exec",
-                                "Command output exceeds limit",
-                            ));
+        self.exec_stage(target, "exec", command).await
+    }
+    pub fn install_error(&self, target: &Target, mut error: AppError) -> AppError {
+        if error
+            .details
+            .as_ref()
+            .is_none_or(|v| v.get("installStage").is_none())
+        {
+            error.details = Some(self.diag.install_failure(
+                &target.connection_id,
+                &error.stage,
+                0,
+                &error.code,
+                None,
+                &[],
+            ));
+        }
+        error
+    }
+    pub fn record_install_failure(
+        &self,
+        target: &Target,
+        error: &AppError,
+        exit: Option<u32>,
+        stderr: &[u8],
+    ) {
+        self.diag.install_failure(
+            &target.connection_id,
+            &error.stage,
+            0,
+            &error.code,
+            exit,
+            stderr,
+        );
+    }
+    pub async fn exec_stage(
+        &self,
+        target: &Target,
+        stage: &str,
+        command: &str,
+    ) -> AppResult<Vec<u8>> {
+        let started = Instant::now();
+        let mut stderr = Zeroizing::new(Vec::new());
+        let mut status = None;
+        let result = async {
+            let mut channel = self.open_channel(target).await?;
+            channel
+                .exec(true, "exec /bin/sh -s")
+                .await
+                .map_err(|e| AppError::io("exec", e))?;
+            channel
+                .data_bytes([command.as_bytes(), b"\n"].concat())
+                .await
+                .map_err(|e| AppError::io("exec", e))?;
+            channel.eof().await.map_err(|e| AppError::io("exec", e))?;
+            let result = tokio::time::timeout(Duration::from_secs(60), async {
+                let mut output = Vec::new();
+
+                while let Some(message) = channel.wait().await {
+                    match message {
+                        ChannelMsg::Data { data } => {
+                            if output.len() + data.len() > 4 * 1024 * 1024 {
+                                return Err(AppError::new(
+                                    "E_LIMIT",
+                                    "exec",
+                                    "Command output exceeds limit",
+                                ));
+                            }
+                            output.extend_from_slice(&data);
                         }
-                        output.extend_from_slice(&data);
+                        ChannelMsg::ExtendedData { data, .. } => {
+                            stderr.extend_from_slice(&data);
+                            let excess = stderr.len().saturating_sub(4096);
+                            stderr.drain(..excess);
+                        }
+                        ChannelMsg::ExitStatus { exit_status } => status = Some(exit_status),
+                        ChannelMsg::Failure => {
+                            return Err(AppError::new(
+                                "E_EXEC",
+                                "exec",
+                                "SSH exec request was rejected",
+                            ))
+                        }
+                        ChannelMsg::Close => break,
+                        _ => {}
                     }
-                    ChannelMsg::ExitStatus { exit_status } => status = Some(exit_status),
-                    ChannelMsg::Failure => {
-                        return Err(AppError::new(
-                            "E_EXEC",
-                            "exec",
-                            "SSH exec request was rejected",
-                        ))
-                    }
-                    ChannelMsg::Close => break,
-                    _ => {}
                 }
+                if status == Some(0) {
+                    Ok(output)
+                } else {
+                    Err(AppError::new(
+                        "E_EXEC",
+                        "exec",
+                        format!("Remote command failed (status {status:?})"),
+                    ))
+                }
+            })
+            .await
+            .map_err(|_| AppError::new("E_TIMEOUT", "exec", "Remote command timed out"));
+            let _ = channel.close().await;
+            result?
+        }
+        .await;
+        result.map_err(|mut error: AppError| {
+            if stage != "exec" {
+                error.stage = stage.into();
+                error.details = Some(self.diag.install_failure(
+                    &target.connection_id,
+                    stage,
+                    started.elapsed().as_millis() as u64,
+                    &error.code,
+                    status,
+                    &stderr,
+                ));
             }
-            if status == Some(0) {
-                Ok(output)
-            } else {
-                Err(AppError::new(
-                    "E_EXEC",
-                    "exec",
-                    format!("Remote command failed (status {status:?})"),
-                ))
-            }
+            error
         })
-        .await
-        .map_err(|_| AppError::new("E_TIMEOUT", "exec", "Remote command timed out"));
-        let _ = channel.close().await;
-        result?
     }
 }
 fn secret_kind(connection: &Connection) -> &'static str {
