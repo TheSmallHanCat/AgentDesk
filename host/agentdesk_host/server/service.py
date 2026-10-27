@@ -98,6 +98,7 @@ class HostService:
             root = self.home / "devices" / device["id"]
             if root.exists():
                 self.devices.cleanup(self.devices.entry(device["id"]))
+                self.devices.clear_session_configs(device["id"])
 
     def cached_capabilities(self) -> dict[str, Any]:
         return {agent: self.capability_cache.get(agent, {"installed": False, "available": False, "loggedIn": False, "authStatus": "checking", "streaming": False, "models": [], "permissionModes": [], "reason": "Agent detection pending"}) for agent in self.adapters}
@@ -422,13 +423,14 @@ class HostService:
             project = self._project(required(params, "projectId"))
             if project["kind"] != "local" or project["deviceId"] != client.device_id:
                 raise fail("E_TARGET", method, "Local project belongs to another device")
-            key = Path(project["nativeRoot"]).name
-            if method == "device.project.enable":
-                self.devices.enable_project(client.device_id, client, key)
-            else:
-                sessions = tuple(row["id"] for row in self.db.all("SELECT id FROM sessions WHERE project_id=?", (project["id"],)))
-                await self.devices.revoke_project(client.device_id, client, key, sessions)
-            return {"enabled": method == "device.project.enable"}
+            key = project["id"]
+            async with self.mutation_lock:
+                if method == "device.project.enable":
+                    self.devices.enable_project(client.device_id, client, key)
+                else:
+                    sessions = tuple(row["id"] for row in self.db.all("SELECT id FROM sessions WHERE project_id=?", (project["id"],)))
+                    await self.devices.revoke_project(client.device_id, client, key, sessions)
+            return {"enabled": method == "device.project.enable", "state": self.devices.entries.get(client.device_id, {}).get("state", "closed")}
         if method in {"device.tunnel.close", "device.offline"}:
             await self.devices.offline(client.device_id, client, params.get("generation"))
             return {"state": "closed"}
@@ -555,7 +557,7 @@ class HostService:
         if session["kind"] == "local" and session["deviceId"] != client.device_id:
             raise fail("E_TARGET", "run.send", "Local project belongs to another device")
         if session["kind"] == "local":
-            self.devices.require_ready(session["deviceId"], client, Path(session["path"]).name)
+            self.devices.require_ready(session["deviceId"], client, session["projectId"])
             if session["permissionMode"] == "plan":
                 raise fail("E_LOCAL_PLAN_UNSUPPORTED", "run.send", "Plan mode cannot enforce read-only device access", "Create a local session in an available permission mode")
         existing = self.db.one("SELECT * FROM client_msgs WHERE client_msg_id=?", (client_msg_id,))
@@ -584,7 +586,7 @@ class HostService:
             raise fail("E_INVALID_PARAMS", "run.send", "Scripts are supported only by FakeAdapter")
         if session["kind"] == "local":
             device = self.db.one("SELECT os FROM devices WHERE id=?", (session["deviceId"],))
-            config = self.devices.session_config(session_id, session["deviceId"], client, Path(session["path"]).name)
+            config = self.devices.session_config(session_id, session["deviceId"], client, session["projectId"])
             session.update(deviceInstructions=instructions(config, device["os"], session["projectPath"]), deviceRoot=str(self.devices.entry(session["deviceId"])), sessionConfig=str(config))
         run_id = f"run_{uuid.uuid4().hex}"
         self.db.reserve_seq(2)
@@ -631,7 +633,7 @@ class HostService:
         if session["kind"] == "local" and session["deviceId"] != client.device_id:
             raise fail("E_TARGET", "run.append", "Local project belongs to another device")
         if session["kind"] == "local":
-            self.devices.require_ready(session["deviceId"], client, Path(session["path"]).name)
+            self.devices.require_ready(session["deviceId"], client, session["projectId"])
             if session["permissionMode"] == "plan":
                 raise fail("E_LOCAL_PLAN_UNSUPPORTED", "run.append", "Plan mode cannot enforce read-only device access")
         previous = self.db.one("SELECT session_id,run_id FROM client_msgs WHERE client_msg_id=?", (message_id,))
@@ -645,9 +647,15 @@ class HostService:
         adapter, handle = self.handles[run_id]
         # The adapter atomically accepts input or rejects a finished run. Do not
         # persist an undelivered message or change the original run on rejection.
+        pending = handle.native.setdefault("pendingInputs", {})
+        envelope = {"text": text, "clientMsgId": message_id, "delivered": False}
+        pending[message_id] = envelope
         try:
-            await adapter.append_input(handle, text)
+            await adapter.append_input(handle, envelope)
         except Exception as error:
+            pending.pop(message_id, None)
+            if isinstance(error, AdapterError) and error.code == "E_APPEND_NOT_READY":
+                raise
             raise fail("E_APPEND_CLOSED", "run.append", "The run can no longer accept this input", "Send this message as a new run.send request") from error
         seq = self.db.next_seq()
         try:
@@ -657,18 +665,20 @@ class HostService:
         except Exception:
             self.db.connection.rollback()
             raise
+        envelope["accepted"] = True
         await self._broadcast(event)
         return {"accepted": True, "clientMsgId": message_id}
 
     async def _watch(self, session_id: str, run_id: str, task: asyncio.Task) -> None:
+        state, failure = "completed", None
         try:
             await task
         except asyncio.CancelledError:
-            await self._finish(session_id, run_id, "interrupted")
+            state = "interrupted"
         except Exception as error:
-            await self._finish(session_id, run_id, "failed", error)
-        else:
-            await self._finish(session_id, run_id, "completed")
+            state, failure = "failed", error
+        async with self.mutation_lock:
+            await self._finish(session_id, run_id, state, failure)
 
     async def _finish(self, session_id: str, run_id: str, state: str, error: Exception | None = None) -> None:
         run = self.db.one("SELECT finished_at FROM runs WHERE id=?", (run_id,))
@@ -676,7 +686,7 @@ class HostService:
             return
         pending = self.db.all("SELECT id FROM approvals WHERE run_id=? AND state='pending'", (run_id,))
         self.db.reserve_seq(len(pending) + len(self.snapshots) + 2)
-        self.handles.pop(run_id, None)
+        active = self.handles.pop(run_id, None)
         self.db.execute("UPDATE runs SET state=?,finished_at=? WHERE id=?", (state, now(), run_id))
         self.db.execute("UPDATE sessions SET status='idle',updated_at=? WHERE id=?", (now(), session_id))
         for approval in pending:
@@ -693,7 +703,12 @@ class HostService:
                 await self.emit(session_id, run_id, "item.completed", {**snapshot["payload"], "interrupted": state != "completed"}, key[1])
         if error:
             await self.emit(session_id, run_id, "item.completed", {"kind": "error", "code": getattr(error, "code", "E_AGENT"), "stage": getattr(error, "stage", "adapter.run"), "text": str(error) if isinstance(error, AdapterError) else "Agent execution failed", "hint": getattr(error, "hint", "Check the Agent environment")}, f"itm_{uuid.uuid4().hex}")
-        await self.emit(session_id, run_id, "run.finished", {"state": state})
+        if active:
+            for message in active[1].native.get("pendingInputs", {}).values():
+                if message.get("accepted") and not message["delivered"]:
+                    await self.emit(session_id, run_id, "item.completed", {"kind": "user_input", "delivery": "undelivered", "clientMsgId": message["clientMsgId"], "text": message["text"]}, "input_" + message["clientMsgId"])
+        reason = self.db.one("SELECT stop_reason FROM runs WHERE id=?", (run_id,))["stop_reason"]
+        await self.emit(session_id, run_id, "run.finished", {"state": state, **({"reason": reason} if reason else {})})
 
     async def _approve(self, session_id: str, run_id: str, kind: str, payload: dict[str, Any]) -> dict[str, Any]:
         if len(encoded(payload.get("questions", []))) > MAX_FRAME - 256 * 1024:
@@ -855,15 +870,28 @@ class HostService:
         return {"text": content[offset:end].decode("utf-8"), "offset": offset, "nextOffset": end, "total": len(content), "hasMore": end < len(content)}
 
     async def _device_state(self, device_id: str, state: str, reason: str | None) -> None:
+        for client in tuple(self.clients):
+            if client.device_id == device_id:
+                try:
+                    await client.send({"jsonrpc": "2.0", "method": "device.state", "params": {"deviceId": device_id, "state": state, "reason": reason}})
+                except ConnectionError:
+                    self.clients.discard(client)
         for session in self.db.all("SELECT s.id FROM sessions s JOIN projects p ON p.id=s.project_id WHERE p.kind='local' AND p.device_id=? AND s.deleted_at IS NULL", (device_id,)):
             await self.emit(session["id"], None, "device.state", {"deviceId": device_id, "state": state, "reason": reason, "waitTimeout": self.devices.wait_timeout, "grace": self.devices.grace})
 
-    async def _device_interrupt(self, device_id: str) -> None:
-        if self.devices.entries.get(device_id, {}).get("state") == "ready":
+    async def _device_interrupt(self, device_id: str, *, authorized: set[str] | None = None, project_id: str | None = None, reason: str = "device_grace_expired") -> None:
+        if authorized is None and project_id is None and self.devices.entries.get(device_id, {}).get("state") == "ready":
             return
-        runs = self.db.all("SELECT r.id,r.session_id FROM runs r JOIN sessions s ON s.id=r.session_id JOIN projects p ON p.id=s.project_id WHERE p.kind='local' AND p.device_id=? AND r.finished_at IS NULL", (device_id,))
+        if authorized is not None:
+            entry = self.devices.entries[device_id]
+            for session in self.db.all("SELECT s.id,p.id AS project_id FROM sessions s JOIN projects p ON p.id=s.project_id WHERE p.kind='local' AND p.device_id=? AND s.deleted_at IS NULL", (device_id,)):
+                if session["project_id"] in authorized:
+                    self.devices.session_config(session["id"], device_id, entry["owner"], session["project_id"])
+        runs = self.db.all("SELECT r.id,r.session_id,p.id AS project_id FROM runs r JOIN sessions s ON s.id=r.session_id JOIN projects p ON p.id=s.project_id WHERE p.kind='local' AND p.device_id=? AND r.finished_at IS NULL", (device_id,))
         for run in runs:
-            self.db.execute("UPDATE runs SET stop_reason='device_grace_expired' WHERE id=?", (run["id"],))
+            if project_id is not None and run["project_id"] != project_id or authorized is not None and run["project_id"] in authorized:
+                continue
+            self.db.execute("UPDATE runs SET stop_reason=? WHERE id=?", (reason, run["id"]))
             self.db.commit()
             active = self.handles.get(run["id"])
             if active:

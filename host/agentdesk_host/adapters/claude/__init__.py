@@ -176,7 +176,10 @@ class ClaudeAdapter:
         try:
             async with asyncio.timeout(30):
                 await client.connect()
+            if native["stopping"]:
+                raise asyncio.CancelledError()
             await client.query(input["text"], session_id=native_id)
+            native["acceptingInput"] = True
             async for message in client.receive_messages():
                 kind = type(message).__name__
                 if kind == "SystemMessage":
@@ -272,14 +275,18 @@ class ClaudeAdapter:
                     if message.is_error and not native["stopping"]:
                         raise AdapterError("E_AGENT", "claude.run", "Claude run failed", "Review the native CLI state and retry")
                     async with native["inputLock"]:
-                        if not native["inputQueue"]:
+                        if native["stopping"] or not native["inputQueue"]:
                             native["acceptingInput"] = False
                             break
                         # Submit only after the CLI returns to idle. There is
                         # never more than one outstanding native input, so CLI
                         # coalescing cannot strand a per-input result counter.
-                        await client.query(native["inputQueue"].pop(0), session_id=native_id)
+                        message = native["inputQueue"].pop(0)
+                        await client.query(message["text"], session_id=native_id)
+                        message["delivered"] = True
         finally:
+            async with native["inputLock"]:
+                native["acceptingInput"] = False
             try:
                 await client.disconnect()
             finally:
@@ -289,13 +296,12 @@ class ClaudeAdapter:
             raise asyncio.CancelledError()
 
     async def append_input(self, run: RunHandle, input):
-        client = run.native.get("client")
-        if client is None or run.task.done() or run.native.get("acceptingInput") is False:
-            raise AdapterError("E_SESSION_BUSY", "claude.append", "Run is not ready", "Wait for the run to start")
         async with run.native.setdefault("inputLock", asyncio.Lock()):
-            if run.task.done() or run.native.get("acceptingInput") is False:
-                raise AdapterError("E_SESSION_BUSY", "claude.append", "Run has finished receiving input")
-            run.native.setdefault("inputQueue", []).append(input["text"] if isinstance(input, dict) else input)
+            if run.native.get("stopping") or run.task.done() or run.native.get("acceptingInput") is False:
+                raise AdapterError("E_APPEND_CLOSED", "claude.append", "Run has finished receiving input")
+            if run.native.get("acceptingInput") is not True:
+                raise AdapterError("E_APPEND_NOT_READY", "claude.append", "Run is starting", "Retry this input shortly")
+            run.native.setdefault("inputQueue", []).append(input if isinstance(input, dict) else {"text": input})
 
     async def stop(self, run: RunHandle):
         run.native["stopping"] = True

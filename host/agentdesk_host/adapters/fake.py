@@ -86,6 +86,9 @@ class FakeAdapter:
                     await context.emit("run.state", {"state": "running"}, None)
             elif kind == "wait_input":
                 text = await asyncio.wait_for(queue.get(), timeout=min(3600, max(0.1, float(step.get("timeout", 60)))))
+                if isinstance(text, dict):
+                    text["delivered"] = True
+                    text = text["text"]
                 await self._item(context, "text", text)
             elif kind == "error":
                 raise AdapterError("E_AGENT", "adapter.run", str(step.get("message", "Scripted agent failed")), "Retry the run")
@@ -95,6 +98,8 @@ class FakeAdapter:
                 raise AdapterError("E_INVALID_PARAMS", "adapter.run", f"Unknown scripted step: {kind}", "Use a supported script step")
 
     async def append_input(self, handle: RunHandle, text: str) -> None:
+        if handle.native.get("stopping") or handle.task.done():
+            raise AdapterError("E_APPEND_CLOSED", "fake.append", "Run has finished receiving input")
         handle.native["queue"].put_nowait(text)
 
     async def _device_script(self, session: dict, step: dict, context: RunContext) -> None:
@@ -131,6 +136,7 @@ class FakeAdapter:
         await context.emit("item.completed", {"kind": "tool_result", "name": "device-script", "toolCallId": item_id, "output": output, "exitCode": code, "isError": code != 0}, item_id + ":result")
 
     async def stop(self, handle: RunHandle) -> None:
+        handle.native["stopping"] = True
         handle.task.cancel()
 
     async def respond_approval(self, handle: RunHandle, approval_id: str, decision: dict[str, Any]) -> None:

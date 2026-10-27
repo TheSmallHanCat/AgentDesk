@@ -138,65 +138,70 @@ class CodexAdapter:
         if session.get("kind") == "local":
             # A-02, policy version 1: no user config edits or privilege fallback.
             config = ["-c", 'sandbox_mode="workspace-write"', "-c", "sandbox_workspace_write.network_access=true", "-c", "sandbox_workspace_write.writable_roots=" + json.dumps([session["deviceRoot"]])]
-        async with NativeRpc(self.path(), config) as rpc:
-            native["rpc"] = rpc
+        try:
+            async with NativeRpc(self.path(), config) as rpc:
+                native["rpc"] = rpc
 
-            async def server_request(method: str, params: dict):
-                if params.get("threadId") != native["threadId"] or (native["turnId"] and params.get("turnId") != native["turnId"]):
-                    raise AdapterError("E_TARGET", "codex.approval", "Approval belongs to another turn", "Discard the stale request")
-                if method not in ("item/commandExecution/requestApproval", "item/fileChange/requestApproval", "item/tool/requestUserInput", "tool/requestUserInput"):
-                    raise AdapterError("E_CAPABILITY", "codex.approval", "Unsupported native request", "Use the official terminal for this capability")
-                question = "requestUserInput" in method
-                payload = {"tool": method.split("/")[1], "input": params, "reason": params.get("reason")}
-                if question:
-                    payload["questions"] = params.get("questions", [])
-                decision = await ctx.approve("question" if question else "tool", payload)
-                if question:
-                    answers = decision.get("answers", {}) if decision.get("behavior") == "allow" else {}
-                    mapped = {}
-                    for entry in params.get("questions", []):
-                        key = entry.get("id", entry.get("question"))
-                        value = answers.get(entry.get("question"), answers.get(key))
-                        if key and value is not None:
-                            mapped[key] = {"answers": value if isinstance(value, list) else [value]}
-                    return {"answers": mapped}
-                return {"decision": "accept" if decision.get("behavior") == "allow" else "decline"}
+                async def server_request(method: str, params: dict):
+                    if params.get("threadId") != native["threadId"] or (native["turnId"] and params.get("turnId") != native["turnId"]):
+                        raise AdapterError("E_TARGET", "codex.approval", "Approval belongs to another turn", "Discard the stale request")
+                    if method not in ("item/commandExecution/requestApproval", "item/fileChange/requestApproval", "item/tool/requestUserInput", "tool/requestUserInput"):
+                        raise AdapterError("E_CAPABILITY", "codex.approval", "Unsupported native request", "Use the official terminal for this capability")
+                    question = "requestUserInput" in method
+                    payload = {"tool": method.split("/")[1], "input": params, "reason": params.get("reason")}
+                    if question:
+                        payload["questions"] = params.get("questions", [])
+                    decision = await ctx.approve("question" if question else "tool", payload)
+                    if question:
+                        answers = decision.get("answers", {}) if decision.get("behavior") == "allow" else {}
+                        mapped = {}
+                        for entry in params.get("questions", []):
+                            key = entry.get("id", entry.get("question"))
+                            value = answers.get(entry.get("question"), answers.get(key))
+                            if key and value is not None:
+                                mapped[key] = {"answers": value if isinstance(value, list) else [value]}
+                        return {"answers": mapped}
+                    return {"decision": "accept" if decision.get("behavior") == "allow" else "decline"}
 
-            rpc.request_handler = server_request
-            params = {"cwd": session["path"], "approvalPolicy": "on-request"}
-            if session.get("model"):
-                params["model"] = session["model"]
-            if session.get("permissionMode") == "plan":
-                params["sandbox"] = "read-only"
-            if session.get("kind") == "local":
-                params.update(sandbox="workspace-write", developerInstructions=session["deviceInstructions"])
-            if session.get("nativeId"):
-                params["threadId"] = session["nativeId"]
-                thread = await rpc.request("thread/resume", params)
-            else:
-                thread = await rpc.request("thread/start", params)
-            native["threadId"] = thread["thread"]["id"]
-            await ctx.save_native(native["threadId"])
-            turn = await rpc.request("turn/start", {"threadId": native["threadId"], "input": [{"type": "text", "text": input["text"]}]})
-            native["turnId"] = turn["turn"]["id"]
-            while True:
-                event = await rpc.notifications.get()
-                method, params = event["method"], event.get("params", {})
-                if method == "_closed":
-                    raise AdapterError("E_AGENT_EXITED", "codex.run", "App server closed during the turn", "Resume the session after checking the CLI")
-                if params.get("threadId") not in (None, native["threadId"]):
-                    continue
-                if params.get("turnId") not in (None, native["turnId"]):
-                    continue
-                if method == "turn/completed":
-                    status = params.get("turn", {}).get("status")
-                    if status == "interrupted" or native["stopping"]:
-                        raise asyncio.CancelledError()
-                    if status != "completed":
-                        raise AdapterError("E_AGENT", "codex.run", "Codex turn failed", "Review native CLI state and retry")
-                    break
-                await self.map_event(method, params, ctx)
-        native["rpc"] = None
+                rpc.request_handler = server_request
+                params = {"cwd": session["path"], "approvalPolicy": "on-request"}
+                if session.get("model"):
+                    params["model"] = session["model"]
+                if session.get("permissionMode") == "plan":
+                    params["sandbox"] = "read-only"
+                if session.get("kind") == "local":
+                    params.update(sandbox="workspace-write", developerInstructions=session["deviceInstructions"])
+                if session.get("nativeId"):
+                    params["threadId"] = session["nativeId"]
+                    thread = await rpc.request("thread/resume", params)
+                else:
+                    thread = await rpc.request("thread/start", params)
+                native["threadId"] = thread["thread"]["id"]
+                await ctx.save_native(native["threadId"])
+                turn = await rpc.request("turn/start", {"threadId": native["threadId"], "input": [{"type": "text", "text": input["text"]}]})
+                native["turnId"] = turn["turn"]["id"]
+                native["acceptingInput"] = True
+                while True:
+                    event = await rpc.notifications.get()
+                    method, params = event["method"], event.get("params", {})
+                    if method == "_closed":
+                        raise AdapterError("E_AGENT_EXITED", "codex.run", "App server closed during the turn", "Resume the session after checking the CLI")
+                    if params.get("threadId") not in (None, native["threadId"]):
+                        continue
+                    if params.get("turnId") not in (None, native["turnId"]):
+                        continue
+                    if method == "turn/completed":
+                        status = params.get("turn", {}).get("status")
+                        if status == "interrupted" or native["stopping"]:
+                            raise asyncio.CancelledError()
+                        if status != "completed":
+                            raise AdapterError("E_AGENT", "codex.run", "Codex turn failed", "Review native CLI state and retry")
+                        break
+                    await self.map_event(method, params, ctx)
+        finally:
+            async with native.setdefault("inputLock", asyncio.Lock()):
+                native["acceptingInput"] = False
+                native["rpc"] = None
 
     @staticmethod
     async def map_event(method, params, ctx):
@@ -243,10 +248,15 @@ class CodexAdapter:
 
     async def append_input(self, run: RunHandle, input):
         native = run.native
-        if not native.get("rpc") or not native.get("turnId"):
-            raise AdapterError("E_SESSION_BUSY", "codex.append", "Run has not started", "Wait for the turn to start")
-        text = input["text"] if isinstance(input, dict) else input
-        await native["rpc"].request("turn/steer", {"threadId": native["threadId"], "expectedTurnId": native["turnId"], "input": [{"type": "text", "text": text}]})
+        async with native.setdefault("inputLock", asyncio.Lock()):
+            if native.get("stopping") or run.task.done() or native.get("acceptingInput") is False:
+                raise AdapterError("E_APPEND_CLOSED", "codex.append", "Run has finished receiving input")
+            if not native.get("rpc") or not native.get("turnId"):
+                raise AdapterError("E_APPEND_NOT_READY", "codex.append", "Run is starting", "Retry this input shortly")
+            text = input["text"] if isinstance(input, dict) else input
+            await native["rpc"].request("turn/steer", {"threadId": native["threadId"], "expectedTurnId": native["turnId"], "input": [{"type": "text", "text": text}]})
+            if isinstance(input, dict):
+                input["delivered"] = True
 
     async def stop(self, run: RunHandle):
         native = run.native

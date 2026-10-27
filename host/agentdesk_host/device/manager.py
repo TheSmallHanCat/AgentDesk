@@ -19,6 +19,8 @@ from ..adapters.native_common import close_process
 
 def windows_path(path: str) -> str:
     path = path.replace("/", "\\")
+    if path.startswith(("\\\\.\\", "\\??\\")):
+        raise AdapterError("E_INVALID_PARAMS", "project.upsert", "Windows device namespace paths are unsupported")
     if path.startswith("\\\\?\\UNC\\"):
         path = "\\\\" + path[8:]
     elif path.startswith("\\\\?\\"):
@@ -75,6 +77,7 @@ class DeviceManager:
             raise AdapterError("E_DEVICE_PATH", "device.register", "Device entry cannot be a symlink")
         os.chmod(root, 0o700)
         self.cleanup(root)
+        self.clear_session_configs(device_id)
         self.entries[device_id] = {"owner": owner, "os": device_os, "state": "preparing", "generation": uuid.uuid4().hex, "projects": set(), "sessions": {}}
         await self.state_changed(device_id, "preparing", None)
         return {"tunnelSocket": str(root / "tunnel.sock"), "hostKeyPinRequired": True, "generation": self.entries[device_id]["generation"]}
@@ -130,6 +133,7 @@ class DeviceManager:
                 raise
             raise AdapterError("E_DEVICE_PROBE", "device.probe", "Device script probe failed", "Inspect the local executor and reverse SSH channel") from None
         entry["state"] = "ready"
+        await self.interrupt(device_id, authorized=set(entry["projects"]), reason="本机授权已撤销")
         timer = self.timers.pop(device_id, None)
         if timer:
             timer.cancel()
@@ -141,13 +145,15 @@ class DeviceManager:
 
     async def revoke_project(self, device_id: str, owner: object, key: str, session_ids: tuple[str, ...] = ()) -> None:
         entry = self.owned(device_id, owner)
-        entry["projects"].discard(key)
         sessions = set(session_ids) | {sid for sid, project in entry["sessions"].items() if project == key}
         for session_id in sessions:
             if not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", session_id):
                 raise AdapterError("E_TARGET", "device.session", "Invalid session identifier")
+        entry["projects"].discard(key)
+        for session_id in sessions:
             (self.home / "session-ssh" / (session_id + ".conf")).unlink(missing_ok=True)
             entry["sessions"].pop(session_id, None)
+        await self.interrupt(device_id, project_id=key, reason="本机授权已撤销")
         if not entry["projects"]:
             await self.offline(device_id, owner)
 
@@ -175,6 +181,7 @@ class DeviceManager:
             return
         self.entries.pop(device_id)
         self.cleanup(self.entry(device_id))
+        self.clear_session_configs(device_id)
         await self.state_changed(device_id, "closed", "device_offline")
         async def expire():
             await asyncio.sleep(self.grace)
@@ -205,6 +212,14 @@ class DeviceManager:
             raise AdapterError("E_DEVICE_PATH", "device.cleanup", "Device key directory cannot be a symlink")
         if keys.exists():
             shutil.rmtree(keys)
+
+    def clear_session_configs(self, device_id: str) -> None:
+        include = 'Include "' + str(self.entry(device_id) / "ssh.conf") + '"\n'
+        paths = [path for path in (self.home / "session-ssh").glob("*.conf") if path.read_text(encoding="utf-8") == include]
+        if any(not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", path.stem) for path in paths):
+            raise AdapterError("E_TARGET", "device.session", "Invalid session identifier")
+        for path in paths:
+            path.unlink(missing_ok=True)
 
     async def close(self):
         for device_id, entry in list(self.entries.items()):

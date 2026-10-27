@@ -86,7 +86,7 @@ def test_device_probe_ownership_keys_reconnect_and_grace(device_home, monkeypatc
         assert ownership.value.code == 'E_TARGET'
         await service.request(client, 'device.offline', {})
         assert not (root / 'keys').exists() and not (root / 'ready').exists()
-        assert (root / 'ssh.conf').exists() and config.read_text() == before_config
+        assert (root / 'ssh.conf').exists() and not config.exists()
         await asyncio.sleep(.05)
         await finish(service)
         assert service.db.one('SELECT state,stop_reason FROM runs WHERE id=?', (run['runId'],)) == {'state': 'interrupted', 'stop_reason': 'device_grace_expired'}
@@ -152,7 +152,7 @@ def test_old_openssh_remotecommand_failure_has_explicit_version_code(device_home
     monkeypatch.setattr(manager.asyncio, 'create_subprocess_exec', spawn)
     monkeypatch.setattr(manager, 'close_process', close)
     async def check():
-        async def state(*args): pass
+        async def state(*args, **kwargs): pass
         devices = DeviceManager(device_home, state, state)
         owner = object()
         generation = (await devices.register('one', owner, 'windows'))['generation']
@@ -184,7 +184,7 @@ def test_late_probe_cannot_remove_new_connection_keys(device_home, monkeypatch):
             count += 1
             return Process(count == 1)
         async def close(process): pass
-        async def state(*args): pass
+        async def state(*args, **kwargs): pass
         monkeypatch.setattr(manager.asyncio, 'create_subprocess_exec', spawn)
         monkeypatch.setattr(manager, 'close_process', close)
         devices = DeviceManager(device_home, state, state)
