@@ -96,6 +96,7 @@ async function pickLocal() {
   }
 }
 async function save(createDir = false) {
+  if (!form.defaultAgent) return
   busy.value = true
   error.value = ''
   try {
@@ -312,6 +313,7 @@ onUnmounted(() => {
               :disabled="
                 !form.name.trim() ||
                 !form.connectionId ||
+                !form.defaultAgent ||
                 (!!form.deviceLocal && form.permissionMode === 'plan')
               "
               @click="save()"

@@ -244,3 +244,89 @@ test('a delayed unsubscribe cannot replace a newer session selection', async () 
   assert.equal(store.state(project, 'b').subscriptionId, undefined)
   assert.equal(store.state(project, 'c').subscriptionId, 'sub-c')
 })
+
+test('startup append retries the same identity then falls back to a new run identity', async () => {
+  setActivePinia(createPinia())
+  const store = useChatStore()
+  cleanup = () => store.$dispose()
+  const current = store.state(project, 's')
+  current.runId = 'old'
+  current.state = 'running'
+  current.draft = 'queued input'
+  const calls: any[] = []
+  window.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+    if (command === 'session_draft_set') return { target: args.target, data: null }
+    calls.push({ command, ...args })
+    if (calls.length === 1) throw { code: 'E_APPEND_NOT_READY', message: 'Starting' }
+    if (calls.length === 2) throw { code: 'E_APPEND_CLOSED', message: 'Closed' }
+    return { target: args.target, data: { runId: 'new', accepted: true } }
+  }
+  await store.send(project, 's')
+  assert.deepEqual(
+    calls.map((value) => value.command),
+    ['run_append', 'run_append', 'run_send'],
+  )
+  assert.equal(calls[0].clientMsgId, calls[1].clientMsgId)
+  assert.notEqual(calls[1].clientMsgId, calls[2].clientMsgId)
+  assert.ok(calls.every((value) => value.text === 'queued input' && value.target.sessionId === 's'))
+  assert.equal(current.pending[0].status, 'delivered')
+})
+
+test('stop cancels startup append retry without starting a new run', async () => {
+  setActivePinia(createPinia())
+  const store = useChatStore()
+  cleanup = () => store.$dispose()
+  const current = store.state(project, 's')
+  current.runId = 'old'
+  current.state = 'running'
+  current.draft = 'queued input'
+  const calls: string[] = []
+  window.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+    if (command === 'session_draft_set') return { target: args.target, data: null }
+    calls.push(command)
+    if (command === 'run_append') throw { code: 'E_APPEND_NOT_READY', message: 'Starting' }
+    return { target: args.target, data: { accepted: true } }
+  }
+  const sending = store.send(project, 's')
+  await Promise.resolve()
+  await store.stop(project, 's')
+  await sending
+  assert.deepEqual(calls, ['run_append', 'run_stop'])
+  assert.equal(current.pending[0].status, 'failed')
+})
+
+test('append retries keep their original run after its completion event', async () => {
+  setActivePinia(createPinia())
+  const store = useChatStore()
+  cleanup = () => store.$dispose()
+  const current = store.state(project, 's')
+  current.runId = 'original'
+  current.state = 'running'
+  current.draft = 'queued'
+  const owners: string[] = []
+  window.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+    if (command === 'session_draft_set') return { target: args.target, data: null }
+    owners.push(args.runId)
+    if (owners.length === 1) {
+      current.runId = undefined
+      current.state = 'completed'
+      throw { code: 'E_APPEND_NOT_READY', message: 'Starting' }
+    }
+    return { target: args.target, data: { accepted: true } }
+  }
+  await store.send(project, 's')
+  assert.deepEqual(owners, ['original', 'original'])
+})
+
+test('append, local plan and local authorization failures have translated messages', async () => {
+  const { errorText } = await import('../src/utils/api.ts')
+  for (const code of [
+    'E_APPEND_CLOSED',
+    'E_APPEND_NOT_READY',
+    'E_LOCAL_PLAN_UNSUPPORTED',
+    'E_DEVICE_UNAUTHORIZED',
+  ]) {
+    assert.match(errorText({ code, message: 'raw native message' }), new RegExp(code))
+    assert.doesNotMatch(errorText({ code, message: 'raw native message' }), /raw native message/)
+  }
+})

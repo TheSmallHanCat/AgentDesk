@@ -1,6 +1,6 @@
 import type { HostEvent } from '../protocol/generated.ts'
 
-export type Delivery = 'sending' | 'delivered' | 'unknown' | 'failed'
+export type Delivery = 'sending' | 'delivered' | 'unknown' | 'failed' | 'undelivered'
 export interface ChatItem {
   id: string
   seq: number
@@ -27,7 +27,11 @@ export function timeline(): ChatTimeline {
   return { items: [], lastSeq: 0, state: 'idle', stateSeq: 0, resolutions: {}, seen: new Set() }
 }
 export function applyEvents(state: ChatTimeline, events: HostEvent[]) {
-  for (const event of events) {
+  for (const source of events) {
+    const event =
+      source.type === 'item.completed' && source.payload.delivery === 'undelivered'
+        ? { ...source, type: 'user.message', itemId: 'message:' + source.payload.clientMsgId }
+        : source
     const snapshot = event.payload.snapshot === true
     if (!snapshot && state.seen.has(event.seq)) continue
     state.seen.add(event.seq)
@@ -79,6 +83,7 @@ export function applyEvents(state: ChatTimeline, events: HostEvent[]) {
           ? 'approval:' + payload.approvalId
           : 'event:' + event.seq)
     let item = state.items.find((value) => value.id === id)
+    if (item && event.type === 'user.message') item.seq = Math.min(item.seq, event.seq)
     if (item && event.seq < item.lastSeq) continue
     if (!item) {
       item = {

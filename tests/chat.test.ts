@@ -103,3 +103,20 @@ test('resolved large approvals retain the blob cursor of the original request', 
   assert.equal(state.items[0].complete, true)
   assert.equal(state.items[0].payload.blob, true)
 })
+
+test('undelivered input updates its original user message across reversed history pages', () => {
+  const state = timeline()
+  const notice = event(
+    3,
+    'item.completed',
+    { kind: 'user_input', delivery: 'undelivered', clientMsgId: 'm', text: 'Queued' },
+    'input_m',
+  )
+  applyEvents(state, [notice])
+  applyEvents(state, [event(2, 'user.message', { clientMsgId: 'm', text: 'Queued', append: true })])
+  applyEvents(state, [notice])
+  assert.equal(state.items.length, 1)
+  assert.equal(state.items[0].type, 'user.message')
+  assert.equal(state.items[0].payload.delivery, 'undelivered')
+  assert.equal(state.items[0].payload.text, 'Queued')
+})

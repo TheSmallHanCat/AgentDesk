@@ -325,7 +325,7 @@
   "projects.chooseLocal": "选择本机目录",
   "device.channel": "执行通道",
   "device.enable": "授权并启用本项目",
-  "device.security": "启用本机执行后，服务器可以以当前 Windows 用户身份执行命令并访问该用户有权访问的文件。这不是沙箱。安全边界是服务器上的这个 Linux 用户：以该用户运行的任何程序，在通道开启期间都能连接本机。按项目授权用于防止误用，不是对抗恶意程序的隔离。仅向信任的服务器和该 Linux 用户下的程序授权。撤销最后一个项目或断开设备后，设备密钥会立即删除。\n\n项目：{path}",
+  "device.security": "启用本机执行后，服务器可以以当前 Windows 用户身份执行命令并访问该用户有权访问的文件。启用任一项目后，该会话可以访问当前 Windows 用户有权访问的整台电脑。项目路径只是工作目录约定，不是访问限制。这不是沙箱。安全边界是服务器上的这个 Linux 用户：以该用户运行的任何程序，在通道开启期间都能连接本机。按项目授权用于防止误用，不是对抗恶意程序的隔离。仅向信任的服务器和该 Linux 用户下的程序授权。撤销最后一个项目或断开设备后，设备密钥会立即删除。\n\n项目：{path}",
   "device.state.unprepared": "未准备",
   "device.state.preparing": "准备中",
   "device.state.probing": "探测中",
@@ -381,5 +381,10 @@
   "login.reason.UNKNOWN": "官方登录未完成，请重新开始登录并检查连接状态。",
   "device.revoke": "撤销本项目授权",
   "device.state.revoking": "正在撤销",
-  "device.planUnavailable": "本机项目不支持计划模式：SSH 执行通道无法保证本机文件只读。"
+  "device.planUnavailable": "本机项目不支持计划模式：SSH 执行通道无法保证本机文件只读。",
+  "chat.delivery.undelivered": "未送达，可重新发送",
+  "errors.E_APPEND_NOT_READY": "任务正在启动，请稍后重试。",
+  "errors.E_APPEND_CLOSED": "当前任务已停止接收输入，请重新发送。",
+  "errors.E_LOCAL_PLAN_UNSUPPORTED": "本机项目不支持计划模式，请选择可用的权限模式。",
+  "errors.E_DEVICE_UNAUTHORIZED": "此项目尚未获准访问本机，请先启用执行通道。"
 }

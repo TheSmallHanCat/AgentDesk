@@ -53,6 +53,7 @@ export const useChatStore = defineStore('chat', () => {
   const loading = reactive<Record<string, boolean>>({})
   const archived = reactive<Record<string, boolean>>({})
   const revisions = new Map<string, number>()
+  const stopVersions = new Map<string, number>()
   let disposed = false
   const draftVersions = new Map<string, number>()
   const draftTimers = new Map<string, ReturnType<typeof setTimeout>>()
@@ -202,9 +203,17 @@ export const useChatStore = defineStore('chat', () => {
     })
     applyEvents(current, incoming)
     for (const event of fresh) {
+      if (event.type === 'run.state' && event.payload.state === 'stopping') {
+        const key = sessionKey(project, sessionId)
+        stopVersions.set(key, (stopVersions.get(key) ?? 0) + 1)
+      }
       if (event.type === 'user.message') {
         const message = current.pending.find((value) => value.id === event.payload.clientMsgId)
         if (message) message.status = 'delivered'
+      }
+      if (event.type === 'item.completed' && event.payload.delivery === 'undelivered') {
+        const message = current.pending.find((value) => value.id === event.payload.clientMsgId)
+        if (message) message.status = 'undelivered'
       }
       if (event.type === 'session.updated') {
         const session = list(project).find((value) => value.id === sessionId)
@@ -395,6 +404,7 @@ export const useChatStore = defineStore('chat', () => {
     clearTimeout(draftTimers.get(draftKey))
     draftTimers.delete(draftKey)
     draftPending.delete(draftKey)
+    stopVersions.delete(draftKey)
     delete states[draftKey]
     sessions[projectKey(project)] = list(project).filter((value) => value.id !== sessionId)
     if (active[projectKey(project)] === sessionId)
@@ -404,32 +414,69 @@ export const useChatStore = defineStore('chat', () => {
   async function send(project: Project, sessionId: string) {
     const current = state(project, sessionId)
     const text = current.draft.trim()
-    if (!text) return
-    const message: PendingMessage = { id: crypto.randomUUID(), text, status: 'sending' }
+    if (
+      !text ||
+      current.state === 'stopping' ||
+      current.pending.some((value) => value.status === 'sending')
+    )
+      return
+    const message = reactive<PendingMessage>({ id: crypto.randomUUID(), text, status: 'sending' })
     current.pending.push(message)
     current.draft = ''
     current.error = ''
     const owner = requestTarget(project, sessionId)
+    const key = sessionKey(project, sessionId)
+    const stopVersion = stopVersions.get(key) ?? 0
+    const runId = current.runId
+    let command = runId ? 'run_append' : 'run_send'
+    let retrySend = false
     try {
-      const result = unwrap(
-        owner,
-        await call<Reply<{ runId: string }>>('run_send', {
-          target: owner,
-          text,
-          clientMsgId: message.id,
-        }),
-      )
-      current.pending.find((value) => value.id === message.id)!.status = 'delivered'
+      let result: { runId?: string } = {}
+      for (let attempt = 0; ; attempt++) {
+        if (message.status !== 'sending')
+          throw { code: 'E_DISCONNECTED', message: 'Input delivery was interrupted' }
+        if (
+          disposed ||
+          states[key] !== current ||
+          (stopVersions.get(key) ?? 0) !== stopVersion ||
+          current.state === 'stopping' ||
+          (active[projectKey(project)] && active[projectKey(project)] !== sessionId)
+        )
+          throw { code: 'E_APPEND_CLOSED', message: 'Input delivery was cancelled' }
+        try {
+          result = unwrap(
+            owner,
+            await call<Reply<{ runId?: string }>>(command, {
+              target: owner,
+              text,
+              clientMsgId: message.id,
+              ...(command === 'run_append' ? { runId } : {}),
+            }),
+          )
+          break
+        } catch (error) {
+          const code =
+            typeof error === 'object' && error && 'code' in error ? String(error.code) : ''
+          if (attempt >= 20) throw error
+          if (command === 'run_append' && code === 'E_APPEND_CLOSED') {
+            command = 'run_send'
+            retrySend = true
+            message.id = crypto.randomUUID()
+          } else if (
+            !(command === 'run_append' && code === 'E_APPEND_NOT_READY') &&
+            !(retrySend && code === 'E_SESSION_BUSY')
+          )
+            throw error
+          await new Promise((resolve) => setTimeout(resolve, 150))
+        }
+      }
+      const delivered = current.pending.find((value) => value.id === message.id)
+      if (delivered && delivered.status !== 'undelivered') delivered.status = 'delivered'
       if (!current.runId && !['completed', 'interrupted', 'failed'].includes(current.state))
         current.runId = result.runId
     } catch (error) {
       const code = typeof error === 'object' && error && 'code' in error ? String(error.code) : ''
-      current.pending.find((value) => value.id === message.id)!.status = [
-        'E_DELIVERY_UNKNOWN',
-        'E_DISCONNECTED',
-        'E_TIMEOUT',
-        'E_IO',
-      ].includes(code)
+      message.status = ['E_DELIVERY_UNKNOWN', 'E_DISCONNECTED', 'E_TIMEOUT', 'E_IO'].includes(code)
         ? 'unknown'
         : 'failed'
       current.error = errorText(error)
@@ -438,6 +485,9 @@ export const useChatStore = defineStore('chat', () => {
   async function stop(project: Project, sessionId: string) {
     const current = state(project, sessionId)
     if (!current.runId) return
+    const key = sessionKey(project, sessionId)
+    stopVersions.set(key, (stopVersions.get(key) ?? 0) + 1)
+    current.state = 'stopping'
     const owner = requestTarget(project, sessionId)
     try {
       unwrap(owner, await call<Reply<unknown>>('run_stop', { target: owner, runId: current.runId }))

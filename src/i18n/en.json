@@ -325,7 +325,7 @@
   "projects.chooseLocal": "Choose local folder",
   "device.channel": "Execution channel",
   "device.enable": "Authorize and enable this project",
-  "device.security": "Local execution grants the server command and file access as your current Windows user. This is not a sandbox. The security boundary is this Linux user on the server: any program running as that user can connect to this computer while the channel is open. Project authorization prevents accidental misuse; it does not isolate malicious programs. Trust the server and all programs running as that Linux user. Device keys are deleted when the last project is revoked or the device disconnects.\n\nProject: {path}",
+  "device.security": "Local execution grants the server command and file access as your current Windows user. Enabling any project lets that session access the entire computer with your current Windows user permissions. The project path is a working directory convention, not an access restriction. This is not a sandbox. The security boundary is this Linux user on the server: any program running as that user can connect to this computer while the channel is open. Project authorization prevents accidental misuse; it does not isolate malicious programs. Trust the server and all programs running as that Linux user. Device keys are deleted when the last project is revoked or the device disconnects.\n\nProject: {path}",
   "device.state.unprepared": "Unprepared",
   "device.state.preparing": "Preparing",
   "device.state.probing": "Probing",
@@ -381,5 +381,10 @@
   "login.reason.UNKNOWN": "The official sign-in did not complete. Start again and check the connection.",
   "device.revoke": "Revoke this project",
   "device.state.revoking": "Revoking",
-  "device.planUnavailable": "Plan mode is unavailable for local projects: the SSH execution channel cannot enforce read-only device access."
+  "device.planUnavailable": "Plan mode is unavailable for local projects: the SSH execution channel cannot enforce read-only device access.",
+  "chat.delivery.undelivered": "Not delivered; you can resend",
+  "errors.E_APPEND_NOT_READY": "The run is starting. Try again shortly.",
+  "errors.E_APPEND_CLOSED": "This run has stopped accepting input. Send the message again.",
+  "errors.E_LOCAL_PLAN_UNSUPPORTED": "Local projects do not support plan mode. Select an available permission mode.",
+  "errors.E_DEVICE_UNAUTHORIZED": "This project is not authorized for local access. Enable its execution channel first."
 }

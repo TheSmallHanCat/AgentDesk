@@ -100,7 +100,7 @@ async function older() {
 function keyboard(event: KeyboardEvent) {
   if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
     event.preventDefault()
-    if (session.value && current.value && !isRunning(current.value.state) && canSend.value)
+    if (session.value && current.value && current.value.state !== 'stopping' && canSend.value)
       void chat.send(props.project, session.value.id)
   }
 }
@@ -265,7 +265,13 @@ const context = computed(() => {
               <div v-if="item.type === 'user.message'" class="user-message">
                 <span class="message-author">{{ t('chat.you') }}</span>
                 <div>{{ item.payload.text }}</div>
-                <small>{{ t('chat.delivery.delivered') }}</small>
+                <small>{{
+                  t(
+                    item.payload.delivery === 'undelivered'
+                      ? 'chat.delivery.undelivered'
+                      : 'chat.delivery.delivered',
+                  )
+                }}</small>
               </div>
               <ApprovalCard
                 v-else-if="item.type === 'approval.request'"
@@ -331,11 +337,11 @@ const context = computed(() => {
             @click="chat.stop(project, session.id)"
             >{{ t('chat.stop') }}</n-button
           ><n-button
-            v-else
             attr-type="submit"
             type="primary"
             :disabled="
               !canSend ||
+              current?.state === 'stopping' ||
               !current?.draft.trim() ||
               !data.online(project.connectionId) ||
               current?.pending.some((value) => value.status === 'sending')
