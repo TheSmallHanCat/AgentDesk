@@ -656,14 +656,23 @@ impl SshManager {
             .as_ref()
             .is_none_or(|v| v.get("installStage").is_none())
         {
-            error.details = Some(self.diag.install_failure(
+            let fallback = self.diag.install_failure(
                 &target.connection_id,
                 &error.stage,
                 0,
                 &error.code,
                 None,
                 &[],
-            ));
+            );
+            if let Some(details) = error
+                .details
+                .as_mut()
+                .and_then(serde_json::Value::as_object_mut)
+            {
+                details.insert("installStage".into(), fallback["installStage"].clone());
+            } else {
+                error.details = Some(fallback);
+            }
         }
         error
     }

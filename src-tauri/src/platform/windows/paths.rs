@@ -1,6 +1,14 @@
 use std::path::{Path, PathBuf};
 
 pub fn validate_local_path(path: &Path) -> crate::error::AppResult<()> {
+    let text = path.to_string_lossy().replace('/', "\\");
+    if text.starts_with(r"\\.\") || text.starts_with(r"\??\") {
+        return Err(crate::error::AppError::new(
+            "E_INPUT",
+            "local.file",
+            "Windows device namespace paths are unsupported",
+        ));
+    }
     for component in path.components() {
         if let std::path::Component::Normal(name) = component {
             let name = name.to_string_lossy();
@@ -49,6 +57,16 @@ pub fn local_system_roots() -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn device_namespace_paths_are_rejected() {
+        for value in [r"\\.\C:\Work", r"\??\C:\Work", "//./C:/Work"] {
+            assert_eq!(
+                validate_local_path(Path::new(value)).unwrap_err().code,
+                "E_INPUT"
+            );
+        }
+        assert!(validate_local_path(Path::new(r"\\?\C:\Work")).is_ok());
+    }
     #[test]
     fn display_paths_preserve_drive_and_unc_roots() {
         assert_eq!(

@@ -36,6 +36,45 @@ async fn prepare_shutdown(client: &HostClient) -> AppResult<()> {
     }
     Ok(())
 }
+async fn cancel_shutdown_after_failure(
+    state: &AppState,
+    target: &Target,
+    error: AppError,
+) -> AppError {
+    state.hosts.disconnect(&target.connection_id).await;
+    let cancelled = async {
+        let client = state.hosts.client(&state.ssh, &state.db, target).await?;
+        let reply = client.request("host.cancelShutdown", json!({})).await?;
+        if reply["cancelled"] != true {
+            return Err(AppError::new(
+                "E_PROTOCOL",
+                "host.cancelShutdown",
+                "Host did not cancel maintenance",
+            ));
+        }
+        Ok(())
+    }
+    .await;
+    match cancelled {
+        Ok(()) => error,
+        Err(cancel) => {
+            state.diagnostics.record(
+                &target.connection_id,
+                "host.cancelShutdown",
+                0,
+                Some(&cancel.code),
+            );
+            shutdown_cancel_error(error, cancel)
+        }
+    }
+}
+fn shutdown_cancel_error(mut original: AppError, cancel: AppError) -> AppError {
+    let mut details = original.details.take().unwrap_or_else(|| json!({}));
+    details["shutdownCancelCode"] = json!(cancel.code);
+    details["shutdownCancelStage"] = json!(cancel.stage);
+    details["hint"] = json!("Host maintenance cancellation failed; reconnect before sending another task or wait for the 60-second maintenance lease to expire");
+    original.with_details(details)
+}
 async fn host_or_inactive(state: &AppState, target: &Target) -> AppResult<Option<Arc<HostClient>>> {
     match state.hosts.client(&state.ssh, &state.db, target).await {
         Ok(client) => Ok(Some(client)),
@@ -63,7 +102,7 @@ fi
         }
     }
 }
-async fn recover_host(
+pub async fn recover_host(
     state: &AppState,
     target: &Target,
     before: &HostLinks,
@@ -83,10 +122,13 @@ async fn recover_host(
             &restore_script(before, expected, restart_fake),
         )
         .await;
-    if let Some(client) = client {
-        let _ = client.request("host.cancelShutdown", json!({})).await;
+    if let Err(error) = recovered {
+        return Err(if client.is_some() {
+            cancel_shutdown_after_failure(state, target, error).await
+        } else {
+            error
+        });
     }
-    recovered?;
     state.hosts.disconnect(&target.connection_id).await;
     if restart_fake.is_some() && before.current.is_some() {
         state
@@ -248,6 +290,18 @@ fn recovery_error(mut original: AppError, recovery: AppError) -> AppError {
     details["recoveryCode"] = json!(recovery.code);
     details["recoveryStage"] = json!(recovery.stage);
     details["hint"] = json!("Host recovery failed; inspect the retained versions before retrying");
+    if let Some(cancel) = recovery
+        .details
+        .as_ref()
+        .filter(|value| value.get("shutdownCancelCode").is_some())
+    {
+        details["shutdownCancelCode"] = cancel["shutdownCancelCode"].clone();
+        details["shutdownCancelStage"] = cancel["shutdownCancelStage"].clone();
+        details["hint"] = json!(format!(
+            "Host recovery failed. {}",
+            cancel["hint"].as_str().unwrap_or_default()
+        ));
+    }
     original.with_details(details)
 }
 
@@ -321,9 +375,12 @@ pub async fn execute_host_install(
         Ok(installed)
     }
     .await;
-    if let Some(client) = &old_client {
-        let _ = client.request("host.cancelShutdown", json!({})).await;
-    }
+    let operation = match operation {
+        Err(error) if old_client.is_some() && !recovery_needed => {
+            Err(cancel_shutdown_after_failure(state, &target, error).await)
+        }
+        other => other,
+    };
     let result = match operation {
         Err(error) if recovery_needed => {
             match recover_host(
@@ -379,24 +436,29 @@ pub async fn host_start(
 }
 #[tauri::command]
 pub async fn host_stop(state: tauri::State<'_, AppState>, target: Target) -> AppResult<Reply<()>> {
-    state.ssh.validate_target(&target)?;
-    let client = host_or_inactive(&state, &target).await?;
+    stop_host(&state, &target).await?;
+    Ok(target.reply(()))
+}
+pub async fn stop_host(state: &AppState, target: &Target) -> AppResult<()> {
+    state.ssh.validate_target(target)?;
+    let client = host_or_inactive(state, target).await?;
     if let Some(client) = &client {
         prepare_shutdown(client).await?;
     }
     state.hosts.disconnect(&target.connection_id).await;
     if let Err(error) = state
         .ssh
-        .exec_stage(&target, "install.stop", STOP_SCRIPT)
+        .exec_stage(target, "install.stop", STOP_SCRIPT)
         .await
     {
-        if let Some(client) = client {
-            let _ = client.request("host.cancelShutdown", json!({})).await;
-        }
-        return Err(error);
+        return Err(if client.is_some() {
+            cancel_shutdown_after_failure(state, target, error).await
+        } else {
+            error
+        });
     }
     state.hosts.disconnect(&target.connection_id).await;
-    Ok(target.reply(()))
+    Ok(())
 }
 #[tauri::command]
 pub async fn host_status(
@@ -444,16 +506,18 @@ pub async fn rollback_host(
         .await
         .and_then(|output| HostLinks::parse(&output));
     if observed.as_ref().ok() != Some(&before) {
-        if let Some(client) = &old_client {
-            let _ = client.request("host.cancelShutdown", json!({})).await;
-        }
-        return Err(observed.err().unwrap_or_else(|| {
+        let error = observed.err().unwrap_or_else(|| {
             AppError::new(
                 "E_CONFLICT",
                 "host.rollback",
                 "Host version changed during rollback preflight",
             )
-        }));
+        });
+        return Err(if old_client.is_some() {
+            cancel_shutdown_after_failure(state, &target, error).await
+        } else {
+            error
+        });
     }
     let result = async {
         state.hosts.disconnect(&target.connection_id).await;
@@ -477,9 +541,6 @@ pub async fn rollback_host(
         client.request("env.probe", json!({})).await
     }
     .await;
-    if let Some(client) = &old_client {
-        let _ = client.request("host.cancelShutdown", json!({})).await;
-    }
     match result {
         Ok(probe) => Ok(probe),
         Err(error) => match recover_host(
@@ -499,6 +560,21 @@ pub async fn rollback_host(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn failed_maintenance_cancellation_survives_recovery_error() {
+        let recovery = shutdown_cancel_error(
+            AppError::new("E_IO", "install.recover", "Failed"),
+            AppError::new("E_DISCONNECTED", "host.rpc", "Closed"),
+        );
+        let error = recovery_error(
+            AppError::new("E_PROTOCOL", "install.probe", "Failed"),
+            recovery,
+        );
+        let details = error.details.unwrap();
+        assert_eq!(details["recoveryCode"], "E_IO");
+        assert_eq!(details["shutdownCancelCode"], "E_DISCONNECTED");
+        assert!(details["hint"].as_str().unwrap().contains("60-second"));
+    }
     #[test]
     fn glibc_baseline() {
         assert!(glibc_supported("glibc 2.28"));

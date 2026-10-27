@@ -158,7 +158,7 @@ impl ExecutorResources {
 }
 
 /// This value must only cross the authenticated control channel; never log or emit it.
-#[derive(Serialize)]
+#[derive(Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExecutorCredentials {
     pub user: String,
@@ -176,6 +176,14 @@ impl Drop for ExecutorCredentials {
 pub struct LocalExecutor {
     port: u16,
     credentials: ExecutorCredentials,
+    #[cfg(windows)]
+    job: Option<Job>,
+    #[cfg(windows)]
+    process: Option<LocalProcess>,
+    runtime: Option<tempfile::TempDir>,
+}
+
+struct ShutdownResources {
     #[cfg(windows)]
     job: Option<Job>,
     #[cfg(windows)]
@@ -237,7 +245,7 @@ impl LocalExecutor {
             format!("restrict {}\n", public_key.trim()),
         )
         .map_err(|error| AppError::io("local.executor", error))?;
-        let private_key = zeroize::Zeroizing::new(
+        let mut private_key = zeroize::Zeroizing::new(
             std::fs::read_to_string(runtime.path().join("identity"))
                 .map_err(|error| AppError::io("local.executor", error))?,
         );
@@ -325,7 +333,7 @@ impl LocalExecutor {
             port,
             credentials: ExecutorCredentials {
                 user,
-                private_key: private_key.to_string(),
+                private_key: std::mem::take(&mut *private_key),
                 host_public_key,
                 script_command: script_command(),
             },
@@ -334,7 +342,7 @@ impl LocalExecutor {
             runtime: Some(runtime),
         };
         if let Err(error) = executor.wait_listening(&sshd).await {
-            executor.shutdown();
+            executor.stop().await;
             return Err(error);
         }
         Ok(executor)
@@ -356,6 +364,13 @@ impl LocalExecutor {
 
     pub fn credentials(&self) -> &ExecutorCredentials {
         &self.credentials
+    }
+
+    pub fn take_credentials(&mut self) -> serde_json::Value {
+        let mut value = serde_json::json!({"user":self.credentials.user,"hostPublicKey":self.credentials.host_public_key,"scriptCommand":self.credentials.script_command});
+        value["privateKey"] =
+            serde_json::Value::String(std::mem::take(&mut self.credentials.private_key));
+        value
     }
 
     pub fn is_running(&self) -> bool {
@@ -429,10 +444,24 @@ impl LocalExecutor {
     }
 
     pub async fn stop(&mut self) {
-        self.shutdown();
+        let resources = self.take_shutdown();
+        let _ = tokio::task::spawn_blocking(move || resources.shutdown()).await;
     }
 
-    fn shutdown(&mut self) {
+    fn take_shutdown(&mut self) -> ShutdownResources {
+        self.credentials.private_key.zeroize();
+        ShutdownResources {
+            #[cfg(windows)]
+            job: self.job.take(),
+            #[cfg(windows)]
+            process: self.process.take(),
+            runtime: self.runtime.take(),
+        }
+    }
+}
+
+impl ShutdownResources {
+    fn shutdown(mut self) {
         #[cfg(windows)]
         {
             if let Some(job) = self.job.take() {
@@ -443,7 +472,6 @@ impl LocalExecutor {
                 process.wait(Duration::from_secs(5));
             }
         }
-        self.credentials.private_key.zeroize();
         if let Some(runtime) = self.runtime.take() {
             // TerminateJobObject is asynchronous for descendants. Wait briefly
             // for their inherited log handles before deleting connection keys.
@@ -461,7 +489,12 @@ impl LocalExecutor {
 
 impl Drop for LocalExecutor {
     fn drop(&mut self) {
-        self.shutdown();
+        let resources = self.take_shutdown();
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            runtime.spawn_blocking(move || resources.shutdown());
+        } else {
+            resources.shutdown();
+        }
     }
 }
 
@@ -547,6 +580,64 @@ async fn run_component_bounded(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn credentials_transfer_moves_the_private_key_without_a_string_copy() {
+        let mut executor = LocalExecutor {
+            port: 0,
+            credentials: ExecutorCredentials {
+                private_key: String::from("fixture-private-key"),
+                user: String::new(),
+                host_public_key: String::new(),
+                script_command: String::new(),
+            },
+            #[cfg(windows)]
+            job: None,
+            #[cfg(windows)]
+            process: None,
+            runtime: None,
+        };
+        let pointer = executor.credentials.private_key.as_ptr();
+        let mut value = executor.take_credentials();
+        assert!(executor.credentials.private_key.is_empty());
+        assert_eq!(value["privateKey"].as_str().unwrap().as_ptr(), pointer);
+        if let serde_json::Value::String(key) = &mut value["privateKey"] {
+            key.zeroize();
+        }
+    }
+
+    #[cfg(windows)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn shutdown_keeps_timers_live_while_files_are_locked() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .join(".tmp");
+        let runtime = tempfile::tempdir_in(root).unwrap();
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .share_mode(0)
+            .open(runtime.path().join("locked"))
+            .unwrap();
+        let path = runtime.path().to_path_buf();
+        let mut executor = LocalExecutor {
+            port: 0,
+            credentials: Default::default(),
+            job: None,
+            process: None,
+            runtime: Some(runtime),
+        };
+        let start = std::time::Instant::now();
+        tokio::join!(executor.stop(), async {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            drop(file);
+        });
+        assert!(start.elapsed() < Duration::from_millis(500));
+        assert!(!path.exists());
+    }
 
     #[test]
     fn runner_reads_a_complete_script_and_uses_plain_utf8() {

@@ -89,7 +89,15 @@ impl HostClient {
     ) -> AppResult<Arc<Self>> {
         let home = remote_home(ssh, target).await?;
         let socket = format!("{home}/.agentdesk/run/host.sock");
-        let stream = ssh.open_streamlocal(target, &socket).await?.into_stream();
+        Self::connect_at(ssh, target, device_id, &socket).await
+    }
+    pub async fn connect_at(
+        ssh: &SshManager,
+        target: &Target,
+        device_id: &str,
+        socket: &str,
+    ) -> AppResult<Arc<Self>> {
+        let stream = ssh.open_streamlocal(target, socket).await?.into_stream();
         let (reader, writer) = tokio::io::split(stream);
         let (events, _) = broadcast::channel(512);
         let (login_events, _) = broadcast::channel(64);
@@ -176,6 +184,14 @@ impl HostClient {
     }
     fn notify(&self, method: &str, params: &Value) -> bool {
         match method {
+            "device.state" => {
+                if let Ok(mut hello) = self.hello.lock() {
+                    hello["deviceState"] = params.clone();
+                }
+                let _ = self
+                    .events
+                    .send(json!({"type":"device.state","payload":params}));
+            }
             "event" | "approval.request" => {
                 let _ = self.events.send(params.clone());
             }
@@ -189,16 +205,31 @@ impl HostClient {
         true
     }
     async fn write(&self, message: &Value) -> AppResult<()> {
-        let mut data =
-            Zeroizing::new(serde_json::to_vec(message).map_err(|e| AppError::io("host.frame", e))?);
-        data.push(b'\n');
-        if data.len() > MAX_FRAME {
+        struct Size(usize);
+        impl std::io::Write for Size {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0 += bytes.len();
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let mut size = Size(1);
+        serde_json::to_writer(&mut size, message).map_err(|e| AppError::io("host.frame", e))?;
+        if size.0 > MAX_FRAME {
             return Err(AppError::new(
                 "E_LIMIT",
                 "host.frame",
                 "Request exceeds 4 MiB",
             ));
         }
+        let mut data = Zeroizing::new(Vec::with_capacity(size.0));
+        let capacity = data.capacity();
+        serde_json::to_writer(&mut *data, message).map_err(|e| AppError::io("host.frame", e))?;
+        data.push(b'\n');
+        debug_assert_eq!(data.len(), size.0);
+        debug_assert_eq!(data.capacity(), capacity);
         let mut writer = self.writer.lock().await;
         let writer = writer.as_mut().ok_or_else(|| {
             AppError::new("E_DISCONNECTED", "host.write", "Host stream is closed")
@@ -404,6 +435,56 @@ mod tests {
         pin::Pin,
         task::{Context, Poll},
     };
+    #[tokio::test]
+    async fn encoded_frame_preserves_escapes_without_growing_and_limits_before_io() {
+        let (writer, reader) = tokio::io::duplex(1024);
+        let (events, mut notifications) = broadcast::channel(1);
+        let (login_events, _) = broadcast::channel(1);
+        let client = HostClient {
+            writer: AsyncMutex::new(Some(Box::new(writer))),
+            pending: Mutex::default(),
+            next: AtomicU64::new(1),
+            cancel: CancellationToken::new(),
+            events,
+            login_events,
+            hello: Mutex::new(json!({})),
+        };
+        let mut reader = BufReader::new(reader);
+        for text in ["x".repeat(117), String::from("line\n\"quoted\"\\中文")] {
+            let message = json!({"text":text});
+            client.write(&message).await.unwrap();
+            let mut line = String::new();
+            reader.read_line(&mut line).await.unwrap();
+            assert!(line.ends_with('\n'));
+            assert_eq!(serde_json::from_str::<Value>(&line).unwrap(), message);
+        }
+        assert_eq!(
+            client
+                .write(&json!({"text":"x".repeat(MAX_FRAME)}))
+                .await
+                .unwrap_err()
+                .code,
+            "E_LIMIT"
+        );
+        let mut line = String::new();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), reader.read_line(&mut line))
+                .await
+                .is_err()
+        );
+        assert!(client.notify(
+            "device.state",
+            &json!({"state":"closed","deviceId":"device"})
+        ));
+        assert_eq!(
+            notifications.recv().await.unwrap()["payload"]["state"],
+            "closed"
+        );
+        assert_eq!(
+            client.hello.lock().unwrap()["deviceState"]["state"],
+            "closed"
+        );
+    }
     struct PartialFailure {
         written: Arc<Mutex<Vec<u8>>>,
     }

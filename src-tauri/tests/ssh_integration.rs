@@ -20,7 +20,7 @@ use russh_sftp::protocol::{self, Attrs, Data, FileAttributes, OpenFlags, StatusC
 use std::{
     collections::{HashMap, HashSet},
     sync::{
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc,
     },
     time::Duration,
@@ -34,12 +34,17 @@ struct Observed {
     resizes: AtomicUsize,
     reverse: AtomicUsize,
     exec: AtomicUsize,
+    host_mode: AtomicBool,
+    draining: AtomicBool,
+    fail_cancel: AtomicBool,
+    host_connections: AtomicUsize,
 }
 struct ServerHandler {
     observed: Arc<Observed>,
     public: PublicKey,
     channels: HashMap<ChannelId, Channel<server::Msg>>,
     stdin_scripts: HashSet<ChannelId>,
+    maintenance_scripts: HashMap<ChannelId, Vec<u8>>,
 }
 impl server::Handler for ServerHandler {
     type Error = russh::Error;
@@ -107,7 +112,9 @@ impl server::Handler for ServerHandler {
             return Ok(());
         }
         session.channel_success(id)?;
-        session.data(id, "ready 中文\r\n".as_bytes().to_vec())?;
+        if !self.observed.host_mode.load(Ordering::SeqCst) {
+            session.data(id, "ready 中文\r\n".as_bytes().to_vec())?;
+        }
         Ok(())
     }
     async fn data(
@@ -116,6 +123,13 @@ impl server::Handler for ServerHandler {
         data: &[u8],
         session: &mut Session,
     ) -> Result<(), Self::Error> {
+        if self.observed.host_mode.load(Ordering::SeqCst) && self.stdin_scripts.contains(&id) {
+            self.maintenance_scripts
+                .entry(id)
+                .or_default()
+                .extend_from_slice(data);
+            return Ok(());
+        }
         if self.channels.contains_key(&id) {
             if data
                 .windows(b"fixture-disconnect".len())
@@ -128,6 +142,23 @@ impl server::Handler for ServerHandler {
                 return Ok(());
             }
             session.data(id, data.to_vec())?;
+        }
+        Ok(())
+    }
+    async fn channel_eof(
+        &mut self,
+        id: ChannelId,
+        session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        if let Some(script) = self.maintenance_scripts.remove(&id) {
+            if script.starts_with(b"printf '%s' ") {
+                session.data(id, b"/fixture".to_vec())?;
+                session.exit_status_request(id, 0)?;
+            } else {
+                session.exit_status_request(id, 1)?;
+            }
+            session.eof(id)?;
+            session.close(id)?;
         }
         Ok(())
     }
@@ -167,6 +198,52 @@ impl server::Handler for ServerHandler {
         reply: server::ChannelOpenHandle,
         session: &mut Session,
     ) -> Result<(), Self::Error> {
+        if self.observed.host_mode.load(Ordering::SeqCst) {
+            assert_eq!(path, "/fixture/.agentdesk/run/host.sock");
+            reply.accept().await;
+            let observed = self.observed.clone();
+            observed.host_connections.fetch_add(1, Ordering::SeqCst);
+            tokio::spawn(async move {
+                use serde_json::{json, Value};
+                use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+                let (reader, mut writer) = tokio::io::split(channel.into_stream());
+                let mut lines = BufReader::new(reader).lines();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    let request: Value = serde_json::from_str(&line).unwrap();
+                    let method = request["method"].as_str().unwrap();
+                    let result = match method {
+                        "hello" => {
+                            json!({"protocolVersion":"1.0","hostId":"host_fixture","capabilities":{}})
+                        }
+                        "host.prepareShutdown" => {
+                            observed.draining.store(true, Ordering::SeqCst);
+                            json!({"prepared":true})
+                        }
+                        "host.cancelShutdown" if !observed.fail_cancel.load(Ordering::SeqCst) => {
+                            observed.draining.store(false, Ordering::SeqCst);
+                            json!({"cancelled":true})
+                        }
+                        "run.send" if !observed.draining.load(Ordering::SeqCst) => {
+                            json!({"accepted":true})
+                        }
+                        _ => Value::Null,
+                    };
+                    let reply = if result.is_null() {
+                        json!({"jsonrpc":"2.0","id":request["id"],"error":{"code":-32000,"message":"Maintenance request failed","data":{"code":"E_HOST_DRAINING","stage":method}}})
+                    } else {
+                        json!({"jsonrpc":"2.0","id":request["id"],"result":result})
+                    };
+                    if writer
+                        .write_all(format!("{reply}\n").as_bytes())
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            });
+            return Ok(());
+        }
         assert_eq!(path, "/tmp/host.sock");
         reply.accept().await;
         let _ = session;
@@ -404,6 +481,7 @@ impl Fixture {
                     public: public.clone(),
                     channels: HashMap::new(),
                     stdin_scripts: HashSet::new(),
+                    maintenance_scripts: HashMap::new(),
                 };
                 let config = config.clone();
                 tokio::spawn(async move {
@@ -849,4 +927,108 @@ async fn review_ecdsa_only_record_selects_matching_host_algorithm() {
     assert_eq!(status.state, "connected");
     assert_eq!(status.key_type.as_deref(), Some("ecdsa-sha2-nistp256"));
     manager.disconnect(&target(&c)).await.unwrap();
+}
+
+#[tokio::test]
+async fn failed_stop_and_recovery_reconnect_before_cancelling_maintenance() {
+    use agentdesk_lib::{
+        commands::env::{recover_host, stop_host},
+        host::{
+            client::HostPool,
+            installer::{HostLinks, Installer},
+        },
+        state::AppState,
+        storage::Storage,
+    };
+    use serde_json::json;
+    let f = Fixture::start().await;
+    f.observed.host_mode.store(true, Ordering::SeqCst);
+    let c = f.connection();
+    let t = target(&c);
+    let db = Arc::new(Db::open(std::path::Path::new(":memory:")).unwrap());
+    db.save_connection(&c).unwrap();
+    let diagnostics = Arc::new(Diagnostics::new(f.dir.path()));
+    let ssh = Arc::new(SshManager::new(
+        db.clone(),
+        Arc::new(KnownHosts::new(
+            f.dir.path().join("maintenance-known-hosts"),
+            None,
+        )),
+        diagnostics.clone(),
+        None,
+    ));
+    let previous = std::env::var_os("AGENTDESK_DATA_ROOT");
+    std::env::set_var("AGENTDESK_DATA_ROOT", f.dir.path());
+    let storage = Storage::new().unwrap();
+    if let Some(previous) = previous {
+        std::env::set_var("AGENTDESK_DATA_ROOT", previous);
+    } else {
+        std::env::remove_var("AGENTDESK_DATA_ROOT");
+    }
+    let state = AppState {
+        db,
+        storage,
+        ssh,
+        diagnostics,
+        local_terminals: Arc::default(),
+        terminals: Arc::default(),
+        transfers: Arc::default(),
+        hosts: Arc::new(HostPool::new("maintenance-device".into())),
+        local_channels: Arc::default(),
+        installer: Arc::new(Installer::default()),
+    };
+    let first = state
+        .ssh
+        .connect(&t, Some("fixture-password".into()), None)
+        .await
+        .unwrap();
+    state
+        .ssh
+        .trust(&t, first.fingerprint.as_deref().unwrap())
+        .unwrap();
+    state
+        .ssh
+        .connect(&t, Some("fixture-password".into()), None)
+        .await
+        .unwrap();
+    let old = state.hosts.client(&state.ssh, &state.db, &t).await.unwrap();
+    let error = stop_host(&state, &t).await.unwrap_err();
+    assert_eq!(error.stage, "install.stop");
+    let fresh = state.hosts.client(&state.ssh, &state.db, &t).await.unwrap();
+    assert!(!Arc::ptr_eq(&old, &fresh));
+    assert_eq!(f.observed.host_connections.load(Ordering::SeqCst), 2);
+    assert!(!f.observed.draining.load(Ordering::SeqCst));
+    assert_eq!(
+        fresh.request("run.send", json!({})).await.unwrap()["accepted"],
+        true
+    );
+    let error = recover_host(
+        &state,
+        &t,
+        &HostLinks {
+            current: Some("old".into()),
+            previous: None,
+        },
+        "new",
+        Some(false),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.stage, "install.recover");
+    assert!(!f.observed.draining.load(Ordering::SeqCst));
+    assert_eq!(f.observed.host_connections.load(Ordering::SeqCst), 3);
+    f.observed.fail_cancel.store(true, Ordering::SeqCst);
+    let error = stop_host(&state, &t).await.unwrap_err();
+    let details = error.details.unwrap();
+    assert_eq!(details["shutdownCancelCode"], "E_HOST_DRAINING");
+    assert!(details["hint"].as_str().unwrap().contains("60-second"));
+    assert!(state
+        .diagnostics
+        .list()
+        .unwrap()
+        .iter()
+        .any(|record| record.stage == "host.cancelShutdown"
+            && record.code.as_deref() == Some("E_HOST_DRAINING")));
+    state.hosts.disconnect(&t.connection_id).await;
+    state.ssh.disconnect(&t).await.unwrap();
 }

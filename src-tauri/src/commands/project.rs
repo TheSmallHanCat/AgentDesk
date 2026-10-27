@@ -33,6 +33,7 @@ pub async fn project_save(
         return Ok(project);
     }
     if project.device_local {
+        crate::platform::validate_local_path(std::path::Path::new(&project.path))?;
         let path =
             std::fs::canonicalize(&project.path).map_err(|e| AppError::io("local.project", e))?;
         if !path.is_dir() {

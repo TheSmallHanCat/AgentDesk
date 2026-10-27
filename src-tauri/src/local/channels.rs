@@ -25,6 +25,7 @@ impl Drop for Completion {
 #[derive(Default)]
 pub struct LocalChannels {
     entries: Mutex<HashMap<String, Entry>>,
+    operations: Mutex<HashMap<String, std::sync::Arc<Mutex<()>>>>,
 }
 #[cfg(windows)]
 fn cancelled() -> AppError {
@@ -35,6 +36,16 @@ fn cancelled() -> AppError {
     )
 }
 impl LocalChannels {
+    async fn project_operation(&self, target: &Target) -> tokio::sync::OwnedMutexGuard<()> {
+        let operation = self
+            .operations
+            .lock()
+            .await
+            .entry(target.connection_id.clone())
+            .or_default()
+            .clone();
+        operation.lock_owned().await
+    }
     pub async fn status(&self, target: &Target) -> Value {
         let entries = self.entries.lock().await;
         if let Some(entry) = entries
@@ -109,6 +120,7 @@ impl LocalChannels {
     ) -> AppResult<Value> {
         use crate::local::executor::{ExecutorResources, LocalExecutor};
         use tauri::{Emitter, Manager};
+        let _operation = self.project_operation(target).await;
         if !crate::local::fs::local(&state.db, target)? {
             return Err(AppError::new(
                 "E_TARGET",
@@ -151,7 +163,7 @@ impl LocalChannels {
                     .map_err(|e| AppError::io("local.resources", e))?,
             );
             executor = Some(LocalExecutor::start(resources).await?);
-            let executor = executor.as_ref().unwrap();
+            let executor = executor.as_mut().unwrap();
             state
                 .ssh
                 .reverse_local(target, &socket, executor.port(), cancel.clone())
@@ -165,13 +177,7 @@ impl LocalChannels {
                 entry.state = "probing".into();
             }
             let _ = app.emit("device-state", json!({"target":target,"state":"probing"}));
-            let mut params = serde_json::to_value(executor.credentials()).map_err(|_| {
-                AppError::new(
-                    "E_EXECUTOR",
-                    "local.credentials",
-                    "Cannot encode execution credentials",
-                )
-            })?;
+            let mut params = executor.take_credentials();
             params["generation"] = registration["generation"].clone();
             let ready = client.request("device.tunnel.ready", params).await?;
             if ready["state"] != "ready" {
@@ -245,6 +251,7 @@ impl LocalChannels {
         let ssh = state.ssh.clone();
         let owner = target.clone();
         let generation = registration["generation"].clone();
+        let mut host_events = client.events.subscribe();
         tokio::spawn(async move {
             let _completion = completion;
             let mut health = tokio::time::interval(std::time::Duration::from_secs(1));
@@ -252,7 +259,17 @@ impl LocalChannels {
                 tokio::select! {
                     _ = task_cancel.cancelled() => break false,
                     _ = client.cancel.cancelled() => break false,
-                    _ = health.tick() => { if !executor.is_running() { break true; } }
+                    event = host_events.recv() => {
+                        if matches!(event, Ok(ref value) if value["type"] == "device.state" && value["payload"]["state"] == "closed") {
+                            break false;
+                        }
+                    }
+                    _ = health.tick() => {
+                        if client.hello.lock().ok().is_some_and(|hello| hello["deviceState"]["state"] == "closed") {
+                            break false;
+                        }
+                        if !executor.is_running() { break true; }
+                    }
                 }
             };
             task_cancel.cancel();
@@ -278,6 +295,7 @@ impl LocalChannels {
         state: &crate::state::AppState,
         target: &Target,
     ) -> AppResult<Value> {
+        let _operation = self.project_operation(target).await;
         if !crate::local::fs::local(&state.db, target)? {
             return Err(AppError::new(
                 "E_TARGET",
@@ -286,7 +304,7 @@ impl LocalChannels {
             ));
         }
         let client = crate::commands::session::project_client(state, target).await?;
-        client
+        let reply = client
             .request(
                 "device.project.revoke",
                 json!({"projectId":target.project_id}),
@@ -303,7 +321,7 @@ impl LocalChannels {
                 false
             }
         };
-        if last {
+        if last || reply["state"] == "closed" {
             self.close(&state.ssh, target).await;
         }
         Ok(self.status(target).await)
@@ -339,6 +357,26 @@ mod tests {
             request_seq: 1,
             device_local: true,
         }
+    }
+    #[tokio::test]
+    async fn project_operations_serialize_only_the_same_connection() {
+        let channels = LocalChannels::default();
+        let first = channels.project_operation(&target("a")).await;
+        assert!(tokio::time::timeout(
+            std::time::Duration::from_millis(20),
+            channels.project_operation(&target("a"))
+        )
+        .await
+        .is_err());
+        let other = tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            channels.project_operation(&target("b")),
+        )
+        .await
+        .unwrap();
+        drop(first);
+        let _next = channels.project_operation(&target("a")).await;
+        drop(other);
     }
     #[tokio::test]
     async fn preparing_does_not_block_status_or_cancellation_and_stale_cleanup_is_rejected() {

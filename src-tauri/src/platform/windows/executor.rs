@@ -67,11 +67,13 @@ pub fn openssh_default_shell() -> AppResult<String> {
 }
 
 pub fn force_command(powershell: &str, default_shell: &str, arguments: &str) -> AppResult<String> {
-    if powershell.contains(['%', '"', '\r', '\n', '\0']) {
+    if powershell.contains([
+        '%', '"', '\r', '\n', '\0', '\u{2018}', '\u{2019}', '\u{201a}', '\u{201b}',
+    ]) {
         return Err(AppError::new(
             "E_LOCAL_PATH",
             "local.executor",
-            "PowerShell path contains unsupported command characters",
+            "PowerShell path contains unsupported command characters or typographic single quotes",
         ));
     }
     let shell = Path::new(default_shell)
@@ -393,6 +395,18 @@ impl LocalProcess {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn force_command_rejects_typographic_single_quotes() {
+        for quote in ['\u{2018}', '\u{2019}', '\u{201a}', '\u{201b}'] {
+            let error = force_command(&format!("C:/a{quote}/pwsh.exe"), "pwsh.exe", "-NoProfile")
+                .unwrap_err();
+            assert_eq!(error.code, "E_LOCAL_PATH");
+            assert!(error.message.contains("typographic"));
+        }
+        assert!(force_command("C:/a'/pwsh.exe", "pwsh.exe", "")
+            .unwrap()
+            .contains("a''/"));
+    }
 
     #[test]
     fn windows_arguments_preserve_quotes_and_trailing_backslashes() {

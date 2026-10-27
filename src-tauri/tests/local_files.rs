@@ -37,6 +37,10 @@ fn local_files_keep_ownership_roots_conflicts_and_native_content() {
         last_opened_at: None,
     };
     db.save_project(&project).unwrap();
+    let mut duplicate = project.clone();
+    duplicate.id = "same-path".into();
+    db.save_project(&duplicate).unwrap();
+    assert_eq!(db.projects().unwrap().len(), 2);
     let owner = Target {
         device_local: true,
         connection_id: "c".into(),
@@ -223,5 +227,14 @@ fn wide_local_projects_cannot_modify_canonical_home_or_system_paths() {
     project.path = dir.path().join("missing").to_string_lossy().into();
     db.save_project(&project).unwrap();
     let allowed = dir.path().join("valid.txt");
+    let mut wide = db.project("wide").unwrap();
+    wide.path = dir
+        .path()
+        .ancestors()
+        .last()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    db.save_project(&wide).unwrap();
     assert!(fs::checked(&db, &owner, &allowed.to_string_lossy(), true, false).is_ok());
 }
