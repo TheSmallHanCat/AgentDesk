@@ -33,6 +33,8 @@ set -eu
 umask 077
 cd {shlex.quote(work)}
 tar -xzf source.tar.gz
+mkdir -p {shlex.quote(REMOTE + '/t')}
+export TMPDIR={shlex.quote(REMOTE + '/t')}
 export UV_NO_CONFIG=1 UV_NO_PROGRESS=1 UV_HTTP_TIMEOUT=45
 export UV_CACHE_DIR="$HOME/.agentdesk/host/cache"
 export UV_PYTHON_INSTALL_DIR="$HOME/.agentdesk/runtime"

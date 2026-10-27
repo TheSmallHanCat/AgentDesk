@@ -27,6 +27,19 @@ fn must<T>(result: AppResult<T>) -> T {
     result.unwrap_or_else(|error| panic!("M3 acceptance failed: {} at {}", error.code, error.stage))
 }
 
+async fn connect_host(
+    ssh: &SshManager,
+    target: &Target,
+    device_id: &str,
+) -> AppResult<Arc<HostClient>> {
+    if let Ok(home) = std::env::var("AGENTDESK_E2E_DEVICE_HOME") {
+        assert!(home.starts_with("/home/agentdesk-test/agentdesk-e2e/") && !home.contains(".."));
+        HostClient::connect_at(ssh, target, device_id, &format!("{home}/run/host.sock")).await
+    } else {
+        HostClient::connect(ssh, target, device_id).await
+    }
+}
+
 async fn event(
     receiver: &mut tokio::sync::broadcast::Receiver<Value>,
     session: &str,
@@ -148,8 +161,7 @@ async fn tunnel(
     let result = async {
         ssh.reverse_local(target, &socket, executor.port(), CancellationToken::new())
             .await?;
-        let mut parameters = serde_json::to_value(executor.credentials())
-            .expect("Execution credentials must be serializable");
+        let mut parameters = executor.take_credentials();
         parameters["generation"] = registration["generation"].clone();
         let ready = client.request("device.tunnel.ready", parameters).await?;
         if ready["state"] != "ready" {
@@ -262,7 +274,7 @@ async fn reconnect_while_old_control_is_blackholed(
         must(old_ssh.connect(&target, None, None).await).state,
         "connected"
     );
-    let old_client = must(HostClient::connect(&old_ssh, &target, device_id).await);
+    let old_client = must(connect_host(&old_ssh, &target, device_id).await);
     let previous = must(old_client.request("device.register", json!({})).await);
     blackhole.store(true, Ordering::SeqCst);
     let started = Instant::now();
@@ -350,11 +362,12 @@ async fn real_device_reverse_native_reconnect_sandbox_wait_grace_cleanup() {
             "connected"
         );
     }
-    let home = must(remote_home(&ssh, &target).await);
+    let home = std::env::var("AGENTDESK_E2E_DEVICE_HOME")
+        .unwrap_or(must(remote_home(&ssh, &target).await));
     let device_id = "m3-e2e-device";
     let reuse = std::env::var("AGENTDESK_E2E_REUSE_HOST").as_deref() == Ok("1");
     if !reuse {
-        if let Ok(existing) = HostClient::connect(&ssh, &target, device_id).await {
+        if let Ok(existing) = connect_host(&ssh, &target, device_id).await {
             let environment = must(existing.request("env.probe", json!({})).await);
             assert_eq!(
                 environment["host"]["activeRuns"].as_u64().unwrap_or(0),
@@ -381,7 +394,7 @@ async fn real_device_reverse_native_reconnect_sandbox_wait_grace_cleanup() {
         );
         println!("PASS: m3_production_host_deployed");
     }
-    let client = must(HostClient::connect(&ssh, &target, device_id).await);
+    let client = must(connect_host(&ssh, &target, device_id).await);
     reconnect_while_old_control_is_blackholed(
         db.clone(),
         directory.path(),
@@ -466,7 +479,14 @@ async fn real_device_reverse_native_reconnect_sandbox_wait_grace_cleanup() {
         .unwrap()
         .contains("已修改"));
     println!("PASS: m3_fake_graphical_protocol_local_multiline_utf8_exit7");
-    let session_config = format!("{home}/.agentdesk/session-ssh/{sid}.conf");
+    let session_config = format!(
+        "{}/session-ssh/{sid}.conf",
+        if std::env::var("AGENTDESK_E2E_DEVICE_HOME").is_ok() {
+            home.clone()
+        } else {
+            format!("{home}/.agentdesk")
+        }
+    );
     let initial_config = must(
         ssh.exec(&target, &format!("cat {}", quote(&session_config)))
             .await,
@@ -519,6 +539,10 @@ async fn real_device_reverse_native_reconnect_sandbox_wait_grace_cleanup() {
     let second_id = format!("m3_second_{}", uuid::Uuid::new_v4().simple());
     let second_path = local_path.join("second-project");
     std::fs::create_dir_all(&second_path).unwrap();
+    let mut second_project = project.clone();
+    second_project.id = second_id.clone();
+    second_project.path = second_path.to_string_lossy().into_owned();
+    must(db.save_project(&second_project));
     must(client.request("project.upsert", json!({"id":second_id,"path":second_path.to_string_lossy(),"name":"Second","kind":"local"})).await);
     must(
         client
@@ -527,19 +551,37 @@ async fn real_device_reverse_native_reconnect_sandbox_wait_grace_cleanup() {
     );
     let second = must(client.request("session.create", json!({"projectId":second_id,"agent":"fake","model":"fake-default","permissionMode":"default"})).await);
     let second_sid = second["id"].as_str().unwrap();
-    let mut second_events = client.events.subscribe();
     must(
         client
             .request("sync.subscribe", json!({"sessionId":second_sid}))
             .await,
     );
-    must(client.request("run.send", json!({"sessionId":second_sid,"clientMsgId":uuid::Uuid::new_v4().to_string(),"text":"Inspect","script":[]})).await);
-    event(&mut second_events, second_sid, "run.finished", 10).await;
+    let second_run = must(client.request("run.send", json!({"sessionId":second_sid,"clientMsgId":uuid::Uuid::new_v4().to_string(),"text":"Inspect","script":[{"type":"sleep","seconds":600},{"type":"wait_input"}]})).await);
+    must(client.request("run.send", json!({"sessionId":sid,"clientMsgId":uuid::Uuid::new_v4().to_string(),"text":"Inspect","script":[{"type":"sleep","seconds":600}]})).await);
+    let mut revocation_events = client.events.subscribe();
     must(
         client
             .request("device.project.revoke", json!({"projectId":project.id}))
             .await,
     );
+    let stopped = event(&mut revocation_events, &sid, "run.finished", 15).await;
+    assert_eq!(stopped["payload"]["state"], "interrupted");
+    assert_eq!(stopped["payload"]["reason"], "本机授权已撤销");
+    let remaining = must(client.request("env.probe", json!({})).await);
+    assert_eq!(remaining["host"]["activeRuns"], 1);
+    let mut second_probe = probe.clone();
+    second_probe["config"] = format!(
+        "{}/session-ssh/{second_sid}.conf",
+        device_root.rsplit_once("/devices/").unwrap().0
+    )
+    .into();
+    second_probe["script"] = "Write-Output '中文执行成功'\n".into();
+    second_probe["sandbox"] = false.into();
+    assert_eq!(
+        python(&ssh, &target, second_probe.clone(), PROBE, 30).await["code"],
+        0
+    );
+    println!("PASS: m3_revoke_stops_only_running_project");
     let denied = client.request("run.send", json!({"sessionId":sid,"clientMsgId":uuid::Uuid::new_v4().to_string(),"text":"Inspect","script":[]})).await.unwrap_err();
     assert_eq!(denied.code, "E_DEVICE_UNAUTHORIZED");
     let revoked = python(&ssh, &target, json!({"root":device_root,"config":session_config}), "print(json.dumps({'key':(pathlib.Path(p['root'])/'keys/id').is_file(),'session':pathlib.Path(p['config']).exists()}))", 15).await;
@@ -548,6 +590,84 @@ async fn real_device_reverse_native_reconnect_sandbox_wait_grace_cleanup() {
         python(&ssh, &target, probe.clone(), PROBE, 15).await["code"],
         0
     );
+    must(
+        client
+            .request("device.project.enable", json!({"projectId":project.id}))
+            .await,
+    );
+    must(client.request("run.send", json!({"sessionId":sid,"clientMsgId":uuid::Uuid::new_v4().to_string(),"text":"Inspect","script":[{"type":"sleep","seconds":600}]})).await);
+    must(client.request("device.offline", json!({})).await);
+    let absent = python(
+        &ssh,
+        &target,
+        json!({"config":session_config}),
+        "print(json.dumps({'exists':pathlib.Path(p['config']).exists()}))",
+        15,
+    )
+    .await;
+    assert_eq!(absent["exists"], false);
+    must(ssh.cancel_reverse_local(&target, &socket).await);
+    executor.stop().await;
+    let mut second_target = target.clone();
+    second_target.project_id = Some(second_id.clone());
+    second_target.session_id = None;
+    must(db.register_session(&second_target, &second));
+    second_target.session_id = Some(second_sid.to_owned());
+    let mut reconnect_events = client.events.subscribe();
+    let (next_executor, next_socket) = tunnel(&ssh, &second_target, &client, &resources).await;
+    assert_eq!(next_socket, socket);
+    executor = next_executor;
+    let stopped = event(&mut reconnect_events, &sid, "run.finished", 15).await;
+    assert_eq!(stopped["payload"]["state"], "interrupted");
+    let remaining = must(client.request("env.probe", json!({})).await);
+    assert_eq!(remaining["host"]["activeRuns"], 1);
+    let absent = python(
+        &ssh,
+        &target,
+        json!({"config":session_config}),
+        "print(json.dumps({'exists':pathlib.Path(p['config']).exists()}))",
+        15,
+    )
+    .await;
+    assert_eq!(absent["exists"], false);
+    println!("PASS: m3_reconnect_only_b_interrupts_a_without_restoring_a_config");
+    assert_eq!(
+        python(&ssh, &target, second_probe, PROBE, 30).await["code"],
+        0
+    );
+    println!("PASS: m3_other_project_channel_remains_usable_after_revoke_and_reconnect");
+    // Append is acknowledged before stop, but the scripted task never consumes it.
+    let queued_id = uuid::Uuid::new_v4().to_string();
+    let second_run_id = second_run["runId"].as_str().unwrap();
+    must(client.request("run.append", json!({"sessionId":second_sid,"runId":second_run_id,"clientMsgId":queued_id,"text":"must remain undelivered"})).await);
+    let mut stop_events = client.events.subscribe();
+    must(
+        client
+            .request(
+                "run.stop",
+                json!({"sessionId":second_sid,"runId":second_run_id}),
+            )
+            .await,
+    );
+    let notice = event(&mut stop_events, second_sid, "item.completed", 15).await;
+    assert_eq!(notice["payload"]["delivery"], "undelivered");
+    assert_eq!(notice["payload"]["clientMsgId"], queued_id);
+    event(&mut stop_events, second_sid, "run.finished", 15).await;
+    let history = must(
+        client
+            .request(
+                "session.history",
+                json!({"sessionId":second_sid,"limit":100}),
+            )
+            .await,
+    );
+    assert!(!history["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|event| event["payload"]["kind"] == "text"
+            && event["payload"]["text"] == "must remain undelivered"));
+    println!("PASS: m3_fake_append_immediate_stop_never_executes_input");
     must(
         client
             .request("device.project.revoke", json!({"projectId":second_id}))
@@ -577,7 +697,7 @@ async fn real_device_reverse_native_reconnect_sandbox_wait_grace_cleanup() {
         must(ssh.connect(&target, None, None).await).state,
         "connected"
     );
-    let client = must(HostClient::connect(&ssh, &target, device_id).await);
+    let client = must(connect_host(&ssh, &target, device_id).await);
     let (mut executor, reconnected_socket) = tunnel(&ssh, &target, &client, &resources).await;
     assert_eq!(reconnected_socket, socket);
     assert_ne!(executor.credentials().host_public_key, old_key);
@@ -601,7 +721,8 @@ async fn real_device_reverse_native_reconnect_sandbox_wait_grace_cleanup() {
     executor.stop().await;
     let waiting_ssh = ssh.clone();
     let waiting_target = target.clone();
-    let waiting_probe = probe.clone();
+    let mut waiting_probe = probe.clone();
+    waiting_probe["config"] = format!("{device_root}/ssh.conf").into();
     let waiter = tokio::spawn(async move {
         python(&waiting_ssh, &waiting_target, waiting_probe, PROBE, 90).await
     });
@@ -635,7 +756,9 @@ async fn real_device_reverse_native_reconnect_sandbox_wait_grace_cleanup() {
     let closed = event(&mut events, &sid, "device.state", 10).await;
     assert_eq!(closed["payload"]["state"], "closed");
     assert_eq!(closed["payload"]["grace"], 300);
-    let timeout = python(&ssh, &target, probe.clone(), PROBE, 90).await;
+    let mut offline_probe = probe.clone();
+    offline_probe["config"] = format!("{device_root}/ssh.conf").into();
+    let timeout = python(&ssh, &target, offline_probe, PROBE, 90).await;
     assert_ne!(timeout["code"], 0);
     assert_eq!(timeout["errorCategory"], "device-offline");
     assert!((59.0..75.0).contains(&timeout["elapsed"].as_f64().unwrap()));
@@ -647,7 +770,7 @@ async fn real_device_reverse_native_reconnect_sandbox_wait_grace_cleanup() {
     let cleanup = python(&ssh, &target, json!({"root":device_root,"native":native_root,"config":session_config}), "root=pathlib.Path(p['root'])\nprint(json.dumps({'keys':(root/'keys').exists(),'socket':(root/'tunnel.sock').exists(),'ready':(root/'ready').exists(),'native':pathlib.Path(p['native']).is_dir(),'sessionConfig':pathlib.Path(p['config']).is_file()}))", 15).await;
     assert_eq!(
         cleanup,
-        json!({"keys":false,"socket":false,"ready":false,"native":true,"sessionConfig":true})
+        json!({"keys":false,"socket":false,"ready":false,"native":true,"sessionConfig":false})
     );
     println!("PASS: m3_local_process_keys_socket_cleanup_native_preserved");
     must(

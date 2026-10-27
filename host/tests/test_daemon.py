@@ -9,8 +9,8 @@ import pytest
 
 
 @pytest.mark.skipif(os.name != "posix", reason="flock and Unix socket daemon require Linux")
-def test_daemon_single_instance_pid_permissions_and_idle_exit(tmp_path):
-    home = tmp_path / "agentdesk"
+def test_daemon_single_instance_pid_permissions_and_idle_exit(socket_home):
+    home = socket_home / "agentdesk"
     command = [sys.executable, "-m", "agentdesk_host", "--home", str(home), "--fake", "--idle-exit", "1"]
     environment = os.environ.copy()
     environment["PYTHONPATH"] = str(Path(__file__).resolve().parents[1])

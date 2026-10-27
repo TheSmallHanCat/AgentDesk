@@ -10,7 +10,7 @@ from agentdesk_host.adapters.codex import CodexAdapter
 from agentdesk_host.adapters.fake import FakeAdapter
 from agentdesk_host.device.manager import DeviceManager
 from agentdesk_host.server.service import HostService
-from test_claude_replay import ReplayClient, sdk_stub, result, context
+from test_claude_replay import ReplayClient, sdk_stub, result
 from test_device import device_home
 from test_host import connected, finish, setup
 

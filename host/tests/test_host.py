@@ -77,12 +77,21 @@ def test_idempotency_monotonic_events_and_no_persisted_deltas(tmp_path):
 def test_snapshot_reconnect_pagination_and_no_omitted_events(tmp_path):
     async def check():
         service, client, _, sid = await setup(tmp_path / "home", tmp_path)
+        ready, release = asyncio.Event(), asyncio.Event()
+        broadcast = service._broadcast
+        async def pause_after_second_delta(event):
+            await broadcast(event)
+            if event["type"] == "item.delta" and event["payload"].get("delta") == "b":
+                ready.set()
+                await release.wait()
+        service._broadcast = pause_after_second_delta
         await service.request(client, "run.send", {"sessionId": sid, "clientMsgId": "msg", "text": "Hello", "script": [{"type": "text", "text": "abcdefghij", "chunks": 10, "delay": 0.02}]})
-        await asyncio.sleep(0.05)
+        await asyncio.wait_for(ready.wait(), 5)
         synced = await service.request(client, "sync.since", {"sessionId": sid, "lastSeq": 0})
         assert synced["snapshots"][0]["payload"]["text"].startswith("ab")
         assert synced["snapshots"][0]["payload"]["snapshot"]
         watermark = synced["currentSeq"]
+        release.set()
         await service.disconnect(client)
         await finish(service)
         new_client, _ = await connected(service, "device_2")
@@ -196,10 +205,10 @@ def test_restart_interruption_and_sequence_survives(tmp_path):
 
 
 @pytest.mark.skipif(os.name == "nt", reason="Unix socket requires the Linux test server")
-def test_real_unix_socket_ndjson_and_permissions(tmp_path):
+def test_real_unix_socket_ndjson_and_permissions(socket_home):
     async def check():
         from agentdesk_host.server.transport import HostServer
-        service = HostService(tmp_path / "home", {"fake": FakeAdapter()})
+        service = HostService(socket_home / "home", {"fake": FakeAdapter()})
         server = HostServer(service)
         await server.start()
         assert server.socket_path.stat().st_mode & 0o777 == 0o600

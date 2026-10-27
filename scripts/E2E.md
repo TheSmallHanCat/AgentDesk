@@ -138,3 +138,18 @@ python scripts/smoke_m3_native.py
 `real_device` 增加黑洞旧控制连接后立即接管注册、本机 Claude/Codex plan 明确拒绝、原始 Codex read-only 设备入口实测、单项目撤销和最后项目密钥删除；原有 60 秒等待、300 秒宽限期与资源回收保持真实时长。`smoke_m3_native` 增加真实界面撤销后桌面 send/append 拒绝；浏览器 `smoke_m3_review` 用隔离 IPC fixture 验证安全提示、撤销按钮、plan 禁选和能力上报中的新增 Agent。
 
 Windows 另外执行 `runner_command_works_with_cmd_and_powershell_default_shells` 和 `first_instruction_child_is_owned_by_the_job` 的 ignored 用例，均带 `--lib -- --ignored --nocapture`；分别模拟 cmd/PowerShell DefaultShell 的实际命令调用以及启动首条指令创建的子进程回收。不修改真实注册表。不要在真实 WebView 运行时执行会重新链接 `agentdesk.exe` 的 Cargo 命令。
+
+## 任务 07：隔离 Host 与撤销/重连回归
+
+```bash
+python scripts/e2e_m3_review2.py
+python scripts/e2e_host_tests.py
+cargo test --locked --manifest-path src-tauri/Cargo.toml --lib -- --ignored --nocapture
+python scripts/smoke_m3_review.py --url http://127.0.0.1:1437
+```
+
+`e2e_m3_review2.py` 将当前 Host 源码放入 `/home/agentdesk-test/agentdesk-e2e/m7-<id>/`，仅注册 FakeAdapter，使用独立数据库与 socket，不升级或停止已安装 Host。Rust 继续走生产 HostClient、反向 streamlocal 和随包 Windows 执行端；通过 `AGENTDESK_E2E_DEVICE_HOME` 选中本次隔离入口，该值仅接受测试目录内路径。测试服务器上已有的 Python 和专用 SSH 客户端仅作为运行前置读取。
+
+该入口重跑任务 06 的反向通道矩阵及真实 60 秒离线等待、300 秒宽限期，新增运行中撤销单项目、仅重新授权 B 时 A 不恢复、B 仍能实际执行命令、Fake 追加后立即停止不执行追加输入。最终停止归属隔离 Host；结果仅保存固定 PASS 标记、数值与布尔值到 `.tmp/e2e/task07-m3-review2.json`，不包含端点、秘密或脚本输出。
+
+Linux pytest 临时目录固定在测试服务器专用目录，Unix socket 用短路径夹具，避免 socket 长度限制影响生命周期测试。本机完整检查可将 `TEMP` / `TMP` 指向仓库 `.tmp/t/`；本机文件测试已兼容用户家目录与测试目录位于不同盘符。浏览器脚本新增未送达消息、默认 Agent 尚未选择时禁止保存的检查，只使用隔离 IPC 夹具。
