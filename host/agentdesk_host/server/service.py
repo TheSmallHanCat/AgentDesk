@@ -656,6 +656,8 @@ class HostService:
             pending.pop(message_id, None)
             if isinstance(error, AdapterError) and error.code == "E_APPEND_NOT_READY":
                 raise
+            if not isinstance(error, AdapterError) or error.code in {"E_TIMEOUT", "E_AGENT_EXITED", "E_DISCONNECTED", "E_IO", "E_DELIVERY_UNKNOWN"}:
+                raise fail("E_DELIVERY_UNKNOWN", "run.append", "Native input delivery is unknown", "Inspect session history before resending this input") from error
             raise fail("E_APPEND_CLOSED", "run.append", "The run can no longer accept this input", "Send this message as a new run.send request") from error
         seq = self.db.next_seq()
         try:

@@ -237,3 +237,21 @@ def test_revoke_and_enable_are_serialized_without_losing_new_grant(device_home, 
             release.set()
             await service.close()
     asyncio.run(check())
+
+
+def test_append_native_timeout_is_unknown_and_must_not_trigger_new_send(tmp_path):
+    async def check():
+        service, client, _, sid = await setup(tmp_path / 'home', tmp_path)
+        async def timeout(*args):
+            raise AdapterError('E_TIMEOUT', 'codex.turn/steer', 'Native response timed out')
+        service.adapters['fake'].append_input = timeout
+        try:
+            run = await service.request(client, 'run.send', {'sessionId': sid, 'clientMsgId': 'first', 'text': 'First', 'script': [{'type': 'sleep', 'seconds': 60}]})
+            with pytest.raises(AdapterError) as error:
+                await service.request(client, 'run.append', {'sessionId': sid, 'runId': run['runId'], 'clientMsgId': 'uncertain', 'text': 'Queued'})
+            assert error.value.code == 'E_DELIVERY_UNKNOWN'
+            assert service.db.one("SELECT * FROM client_msgs WHERE client_msg_id='uncertain'") is None
+            assert service.db.one('SELECT state FROM runs WHERE id=?', (run['runId'],))['state'] == 'running'
+        finally:
+            await service.close()
+    asyncio.run(check())
