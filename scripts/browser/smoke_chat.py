@@ -11,7 +11,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--url', default='http://127.0.0.1:5173')
     args = parser.parse_args()
-    root = Path(__file__).resolve().parent.parent
+    root = Path(__file__).resolve().parents[2]
     output = root / 'test-results'
     output.mkdir(exist_ok=True)
     fixture = (root / 'tests/fixtures/native.js').read_text(encoding='utf-8') + '\n' + (root / 'tests/fixtures/chat.js').read_text(encoding='utf-8')

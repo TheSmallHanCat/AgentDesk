@@ -82,7 +82,7 @@ impl Environment {
     }
     fn secret(&self, name: &str) -> String {
         std::fs::read_to_string(self.private.join(name))
-            .expect("Run scripts/e2e_prepare.py provision first")
+            .expect("Run scripts/e2e/e2e_prepare.py provision first")
             .trim()
             .to_string()
     }
@@ -161,7 +161,7 @@ impl Context {
 }
 
 #[tokio::test]
-#[ignore = "requires dedicated test server environment and scripts/e2e_prepare.py"]
+#[ignore = "requires dedicated test server environment and scripts/e2e/e2e_prepare.py"]
 async fn real_authentication_and_fingerprints() {
     let Some(env) = Environment::load() else {
         return;

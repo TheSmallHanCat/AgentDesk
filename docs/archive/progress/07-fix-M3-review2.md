@@ -43,7 +43,7 @@
 | 浏览器 smoke_m3_review                                          | 安全提示、撤销、plan 禁选、能力终端、未送达显示、默认 Agent 校验全部通过；使用 IPC 夹具。                                                          |
 | diff / 秘密与资源核对                                           | git diff --check 通过；任务 diff / 提交扫描未发现测试服务器受保护值。5 次隔离 Host 的 pid、密钥、ready、session conf、socket 均归零。              |
 
-可重复入口见 `scripts/E2E.md` 的任务 07 一节。反向验收使用当前源码的隔离 Fake-only Host，路径为专用测试目录中的唯一子目录，未升级、停止或改写现有已安装 Host；继续使用生产 Rust SSH / HostClient / 执行端。Linux pytest 也上传到专用目录运行。最终本机完整检查将 TEMP/TMP 固定到 `.tmp/t/`；测试修正了跨盘临时目录假设，Unix socket 用短路径夹具。
+可重复入口见 `scripts/e2e/README.md` 的任务 07 一节。反向验收使用当前源码的隔离 Fake-only Host，路径为专用测试目录中的唯一子目录，未升级、停止或改写现有已安装 Host；继续使用生产 Rust SSH / HostClient / 执行端。Linux pytest 也上传到专用目录运行。最终本机完整检查将 TEMP/TMP 固定到 `.tmp/t/`；测试修正了跨盘临时目录假设，Unix socket 用短路径夹具。
 
 复现记录：干净 `822b61a` 副本上的九项 Host 回归全部失败；续跑半成品首次独立运行是 8 失败 / 1 通过；前端新增前三项回归在修复前失败；恢复字段与追加超时分别有修改前失败记录。服务器首轮失败曾由新增 B 项目未登记桌面归属导致 E_TARGET，补齐真实归属后全套通过。Linux 原快照测试仅依赖 50ms 睡眠，在负载下只收到一条增量；改为等待第二条增量并暂停该边界后完整重跑通过。未将这些中间失败记为通过。
 
@@ -54,7 +54,7 @@
 - 首次提示：`src/i18n/zh-CN.json`、`src/i18n/en.json` 的 `device.security`。
 - 安全说明：`README.md` 的“本机模式安全边界（A-03）”。
 - 行为契约：`docs/M3-CONTRACT.md` 的执行通道、Host 本机模式与会话段落。
-- 验收入口：`scripts/E2E.md` 的任务 07 一节；新增 `scripts/e2e_m3_review2.py`。
+- 验收入口：`scripts/e2e/README.md` 的任务 07 一节；新增 `scripts/e2e/e2e_m3_review2.py`。
 - 实现提交：`66adfdc`（Host 撤销和投递）、`bd765a8`（前端）、`9d68f3c`（Rust 核心）、`2445838`（追加超时防重发）；验收脚本与本报告另作提交。
 
 SDK 调用依据为[固定 Claude SDK 的 query / interrupt / disconnect 源码](https://github.com/anthropics/claude-agent-sdk-python/blob/v0.2.174/src/claude_agent_sdk/client.py)，只核对既有官方调用，不替换 SDK 或 CLI，也不发模型请求。

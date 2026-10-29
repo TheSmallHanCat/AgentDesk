@@ -12,7 +12,7 @@ try:
 except ImportError:
     paramiko = None
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 PRIVATE = ROOT / ".tmp" / "e2e"
 REMOTE = "/home/agentdesk-test/agentdesk-e2e"
 REQUIRED = (

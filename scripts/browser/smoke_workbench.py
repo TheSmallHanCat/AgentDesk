@@ -5,12 +5,13 @@ from playwright.sync_api import sync_playwright, expect
 
 
 def main():
-    output = Path("test-results")
+    root = Path(__file__).resolve().parents[2]
+    output = root / "test-results"
     output.mkdir(exist_ok=True)
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page(viewport={"width": 1280, "height": 820})
-        page.add_init_script(path="tests/fixtures/native.js")
+        page.add_init_script(path=str(root / "tests/fixtures/native.js"))
         page.on("dialog", lambda dialog: dialog.accept())
         errors = []
         page.on("pageerror", lambda error: errors.append(str(error)))

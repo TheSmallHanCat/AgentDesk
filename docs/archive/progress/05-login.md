@@ -42,7 +42,7 @@
 4. 检查 /proc，Claude 登录与 Codex 登录/app-server 进程均已结束。比较 .claude/.credentials.json 和 .codex/auth.json 的存在性、大小、mtime、inode，前后一致；没有读取凭据内容。
 5. 扫描 7 个 Host 日志/SQLite/WAL 文件、隔离桌面数据文件和原生诊断记录，未发现本次授权链接或设备码。真实 Diagnostics.export 落盘扫描由上述 Rust 回归覆盖；原生脚本不驱动系统“保存”对话框。
 
-复现入口：scripts/smoke_login_native.py --deploy；已部署版本重跑可省略 --deploy。结果只保存计数、固定标记和安全错误码，位于忽略的 .tmp/e2e/task05-native-login.json；Linux 结果为 task05-host-tests.json，最终版本状态为 task05-final-host-state.json。
+复现入口：scripts/e2e/smoke_login_native.py --deploy；已部署版本重跑可省略 --deploy。结果只保存计数、固定标记和安全错误码，位于忽略的 .tmp/e2e/task05-native-login.json；Linux 结果为 task05-host-tests.json，最终版本状态为 task05-final-host-state.json。
 
 安装过程中两次出现 E_EXEC/exec（首轮未提取安全错误码），current 均未切换；其中一次失败后观察到 Host 已停止。重试通过产品 Installer 完成部署、启动与全部图形流程。尚未确定最初执行失败的位置，未据此扩大修改安装架构；这项部署重试风险保留记录。
 

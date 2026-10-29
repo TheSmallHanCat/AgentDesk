@@ -11,7 +11,7 @@ import pytest
 @pytest.fixture
 def builder(tmp_path, monkeypatch):
     root = Path(__file__).resolve().parents[2]
-    spec = importlib.util.spec_from_file_location('prepare_isolation_image', root / 'scripts/prepare_isolation_image.py')
+    spec = importlib.util.spec_from_file_location('prepare_isolation_image', root / 'scripts/build/prepare_isolation_image.py')
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     source = tmp_path / 'host/agentdesk_host'

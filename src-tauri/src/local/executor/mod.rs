@@ -780,7 +780,7 @@ mod tests {
 
     #[cfg(windows)]
     #[tokio::test]
-    #[ignore = "Requires python scripts/build_windows_resources.py; starts an isolated loopback SSH server"]
+    #[ignore = "Requires python scripts/build/build_windows_resources.py; starts an isolated loopback SSH server"]
     async fn executor_real_multiline_utf8_exit_and_cleanup() {
         use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
         use std::os::windows::process::CommandExt;

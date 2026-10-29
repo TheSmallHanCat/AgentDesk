@@ -77,7 +77,7 @@ Claude 的消息 fixture 是依据[官方流式文档](https://code.claude.com/d
 
 最终只读状态：current=`0.2.0-ec8643885b48-af5b3cf1`，previous=`0.2.0-502382c0e309-b8c978f3`；已只读确认 previous 声明支持 schema 2（本轮未再次执行真实回滚）；受管 Host 有意保持运行，activeRuns=0；设备密钥目录/文件/socket 均为 0。本机随包 sshd/pwsh 残留进程为 0。脱敏结果分别保留在 `.tmp/e2e/task04-final-host-state.json`、`task04-native-preflight.json`。
 
-测试服务器系统 OpenSSH 7.4 不支持 RemoteCommand，因此最初探测失败不计通过。Host 已能返回 E_DEVICE_SSH_VERSION 明确原因。专用用户目录 `~/.agentdesk/acceptance/ssh-client/` 构建并实测 OpenSSH 10.6p1 / LibreSSL 4.3.4，使用固定官方 Zig 0.13.0；归档 SHA256 在 `scripts/e2e_build_ssh_client.py` 固定，实际静态客户端 SHA256 为 `1671e0aae34b7c5f6888f4374c4ab9c629b6d8466df8a501d1c7419fd788b3b4`。只通过 Host 进程和单条验收命令的局部 PATH 使用，不修改系统客户端、sshd 或登录 shell。glibc 2.17 仍低于产品基线，不扩大支持范围。
+测试服务器系统 OpenSSH 7.4 不支持 RemoteCommand，因此最初探测失败不计通过。Host 已能返回 E_DEVICE_SSH_VERSION 明确原因。专用用户目录 `~/.agentdesk/acceptance/ssh-client/` 构建并实测 OpenSSH 10.6p1 / LibreSSL 4.3.4，使用固定官方 Zig 0.13.0；归档 SHA256 在 `scripts/e2e/e2e_build_ssh_client.py` 固定，实际静态客户端 SHA256 为 `1671e0aae34b7c5f6888f4374c4ab9c629b6d8466df8a501d1c7419fd788b3b4`。只通过 Host 进程和单条验收命令的局部 PATH 使用，不修改系统客户端、sshd 或登录 shell。glibc 2.17 仍低于产品基线，不扩大支持范围。
 
 图形入口首次验证还发现 Windows canonical 资源目录带 `\?\` 前缀，导致随包 sshd 无法完成启动探测；资源发现现统一去前缀并保留 UNC 语义，已用 canonical 路径实际回归并重新跑通图形链路。环境探测另覆盖了“文件存在但不可执行”的失败路径，真实安全软件拦截策略未人为修改。测试执行期间曾因正在运行的 Rust E2E 可执行文件被链接器占用而出现 LNK1104，待其结束后完整 Rust 检查已重新通过，未将中间失败记作通过。
 

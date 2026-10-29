@@ -20,7 +20,7 @@ try:
 except ModuleNotFoundError:
     paramiko = None
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts" / "e2e"))
 from e2e_common import PRIVATE, REMOTE, configured, connect, run, save_result  # noqa: E402
 
 SPIKES = Path(__file__).resolve().parent

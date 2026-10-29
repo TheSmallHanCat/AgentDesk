@@ -53,6 +53,6 @@ A-01：真实 Agent 的会话删除采用归档，`session.list({archived:true})
 
 ## 依赖与验收
 
-`scripts/build_windows_resources.py` 固定官方 Win32-OpenSSH、PowerShell 7 版本和 SHA256，准备到忽略的 `resources/windows/`，Windows 打包流程携带，许可证见 NOTICE。开发模式使用同一准备脚本。资源缺失、启动被拒和端口故障报告具体路径与原因。
+`scripts/build/build_windows_resources.py` 固定官方 Win32-OpenSSH、PowerShell 7 版本和 SHA256，准备到忽略的 `resources/windows/`，Windows 打包流程携带，许可证见 NOTICE。开发模式使用同一准备脚本。资源缺失、启动被拒和端口故障报告具体路径与原因。
 
 服务器 SSH 客户端需要支持 `RemoteCommand`。测试服务器 OpenSSH 7.4 低于要求，专用新版客户端仅作为基线外验收前置，细节和实际通过结果以任务 04 报告为准。

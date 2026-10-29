@@ -51,6 +51,7 @@ jobs:
           python-version: '3.12'
       - uses: astral-sh/setup-uv@v6
       - run: uv sync --project host --frozen
+      - run: python scripts/check_repository.py
       - run: python protocol/generate.py --check
       - run: uv run --project host python -m pytest host/tests -q
   secrets:

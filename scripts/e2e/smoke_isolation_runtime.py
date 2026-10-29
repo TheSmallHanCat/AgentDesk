@@ -9,7 +9,7 @@ import sys
 import tempfile
 import uuid
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'host'))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'host'))
 from agentdesk_host.runtime.client import RuntimeClient
 from agentdesk_host.runtime.engine import PodmanEngine
 

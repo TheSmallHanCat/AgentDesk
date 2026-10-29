@@ -45,10 +45,10 @@ Worker 使用有帧上限的 stdio 请求和响应，复用现有 Agent 适配�
 先准备 Host wheel 与锁定依赖：
 
 ```bash
-python scripts/build_host_resources.py
+python scripts/build/build_host_resources.py
 ```
 
-`scripts/prepare_isolation_image.py` 要求 `--base-image` 为经核验的官方 Python 3.12 Debian 基础镜像完整摘要，`--output` 为不存在的构建目录。默认只生成上下文；显式增加 `--build` 才调用本机 rootless Podman。基础镜像需已存在本机，构建不自动拉取基础镜像；安装锁定 Python 依赖和系统构建组件需要网络。
+`scripts/build/prepare_isolation_image.py` 要求 `--base-image` 为经核验的官方 Python 3.12 Debian 基础镜像完整摘要，`--output` 为不存在的构建目录。默认只生成上下文；显式增加 `--build` 才调用本机 rootless Podman。基础镜像需已存在本机，构建不自动拉取基础镜像；安装锁定 Python 依赖和系统构建组件需要网络。
 
 构建工具检查 wheel 与当前源码一致，输出构建后镜像的不可变 ID。将输出的 `isolation.image` 配置合并到服务器 `~/.agentdesk/config.json`，再重启 Host。该步骤由用户或管理员执行，不由桌面静默更改系统设置。
 
@@ -56,9 +56,9 @@ python scripts/build_host_resources.py
 
 ## 验证与回退
 
-本地可运行 `uv run --project host python -m pytest host/tests/test_isolation.py -q`，以及 `scripts/smoke_isolation.py`。这些检查使用临时数据、真实 Python 子进程和 Fake Adapter，不调用模型。
+本地可运行 `uv run --project host python -m pytest host/tests/test_isolation.py -q`，以及 `scripts/browser/smoke_isolation.py`。这些检查使用临时数据、真实 Python 子进程和 Fake Adapter，不调用模型。
 
-Linux 实机验收使用 `python scripts/smoke_isolation_runtime.py --image IMAGE_ID`，其中 `IMAGE_ID` 为已准备镜像的实际不可变 ID。脚本只创建所属临时目录和容器，验证边界及 Host 标记不可见，再清理临时资源；不运行 Agent 登录或模型请求。正式使用前还需要用户授权后的 Claude 登录、真实任务、重连、审批与停止验收。
+Linux 实机验收使用 `python scripts/e2e/smoke_isolation_runtime.py --image IMAGE_ID`，其中 `IMAGE_ID` 为已准备镜像的实际不可变 ID。脚本只创建所属临时目录和容器，验证边界及 Host 标记不可见，再清理临时资源；不运行 Agent 登录或模型请求。正式使用前还需要用户授权后的 Claude 登录、真实任务、重连、审批与停止验收。
 
 停用时先停止隔离任务，再归档对应项目；持久目录保留以供恢复。不要将隔离会话改为普通环境恢复。二进制降级需要部署前的数据库备份，不能让旧 Host 强行读取新 schema；本实现不自动执行备份恢复、用户数据迁移或删除。
 

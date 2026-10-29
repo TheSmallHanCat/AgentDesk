@@ -5,7 +5,7 @@ from playwright.sync_api import sync_playwright, expect
 
 
 def main():
-    output = Path("test-results")
+    output = Path(__file__).resolve().parents[2] / "test-results"
     output.mkdir(exist_ok=True)
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)

@@ -29,7 +29,7 @@ RemoteShell 和 CC Desk Tunnel 只用于理解行为，未整段复制业务实�
 AgentDesk 第三方组件说明
 
 Windows 本机执行端随安装包分发以下固定版本的官方组件。二进制由
-scripts/build_windows_resources.py 下载并校验 SHA256，不存入 Git 仓库。
+scripts/build/build_windows_resources.py 下载并校验 SHA256，不存入 Git 仓库。
 
 Win32-OpenSSH 10.4.0.0p1-Preview
   项目：https://github.com/PowerShell/Win32-OpenSSH

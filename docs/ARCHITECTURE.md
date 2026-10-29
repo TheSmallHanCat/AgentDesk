@@ -14,22 +14,22 @@ flowchart LR
 
 ## 模块职责
 
-| 目录 | 职责与入口 |
-| --- | --- |
-| `src/` | Vue 界面。`main.ts` 初始化应用，`router/` 定义页面，`views/` 组合工作流，`components/` 提供交互组件，`stores/` 管理状态。 |
-| `src-tauri/src/commands/` | 桌面 IPC 边界，校验目标归属并分派连接、项目、文件、会话、终端和安装请求。 |
-| `src-tauri/src/ssh/` | SSH 认证、主机指纹、通道、PTY、SFTP 和传输生命周期。 |
-| `src-tauri/src/host/` | Host 安装、升级、连接与消息转发。 |
-| `src-tauri/src/local/` | 可选的本机文件、终端及反向执行通道；需要显式授权。 |
-| `src-tauri/src/platform/` | Windows / Unix 平台实现。平台细节不进入 Vue 组件。 |
-| `src-tauri/src/db/` | 桌面连接、项目索引、目标映射和草稿；秘密使用系统凭据库。 |
-| `host/agentdesk_host/server/` | Host 生命周期、Unix socket、RPC 调度、登录与业务状态。入口为 `host/agentdesk_host/__main__.py`。 |
-| `host/agentdesk_host/adapters/` | 官方 Agent 适配器和用于验收的 Fake Adapter。界面不直接调用模型服务。 |
-| `host/agentdesk_host/store/` | Host SQLite、事件序号和保留策略。 |
-| `host/agentdesk_host/device/` | 可选本机执行通道的服务器端控制。 |
-| `host/agentdesk_host/runtime/` | 可选容器运行环境。普通远端项目不依赖此模块的容器前置条件。 |
-| `protocol/` | JSON Schema、协议样例与三端类型生成器。 |
-| `resources/` | 随包资源说明与本机构建产物；下载的二进制不提交到 Git。 |
+| 目录                            | 职责与入口                                                                                                                |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `src/`                          | Vue 界面。`main.ts` 初始化应用，`router/` 定义页面，`views/` 组合工作流，`components/` 提供交互组件，`stores/` 管理状态。 |
+| `src-tauri/src/commands/`       | 桌面 IPC 边界，校验目标归属并分派连接、项目、文件、会话、终端和安装请求。                                                 |
+| `src-tauri/src/ssh/`            | SSH 认证、主机指纹、通道、PTY、SFTP 和传输生命周期。                                                                      |
+| `src-tauri/src/host/`           | Host 安装、升级、连接与消息转发。                                                                                         |
+| `src-tauri/src/local/`          | 可选的本机文件、终端及反向执行通道；需要显式授权。                                                                        |
+| `src-tauri/src/platform/`       | Windows / Unix 平台实现。平台细节不进入 Vue 组件。                                                                        |
+| `src-tauri/src/db/`             | 桌面连接、项目索引、目标映射和草稿；秘密使用系统凭据库。                                                                  |
+| `host/agentdesk_host/server/`   | Host 生命周期、Unix socket、RPC 调度、登录与业务状态。入口为 `host/agentdesk_host/__main__.py`。                          |
+| `host/agentdesk_host/adapters/` | 官方 Agent 适配器和用于验收的 Fake Adapter。界面不直接调用模型服务。                                                      |
+| `host/agentdesk_host/store/`    | Host SQLite、事件序号和保留策略。                                                                                         |
+| `host/agentdesk_host/device/`   | 可选本机执行通道的服务器端控制。                                                                                          |
+| `host/agentdesk_host/runtime/`  | 可选容器运行环境。普通远端项目不依赖此模块的容器前置条件。                                                                |
+| `protocol/`                     | JSON Schema、协议样例与三端类型生成器。                                                                                   |
+| `resources/`                    | 随包资源说明与本机构建产物；下载的二进制不提交到 Git。                                                                    |
 
 ## 关键流程
 

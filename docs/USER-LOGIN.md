@@ -6,4 +6,4 @@ Host 使用 Claude `auth login` 的后台 PTY，Codex 优先使用 app-server �
 
 开发与故障排查先检查环境页状态和安全错误码。输出格式变化时，对话框自动显示清洗后的原始输出和输入框。只有图形流程无法使用时，才由用户在原生 CLI 终端手工运行官方登录命令，再刷新环境状态。不得在工单、日志或截图中保存授权链接、设备码或回填码。
 
-协议见 [M2 契约](M2-CONTRACT.md)，解析样例与验收见 [任务 05 报告](progress/05-login.md)。
+协议见 [M2 契约](M2-CONTRACT.md)，解析样例与验收见 [任务 05 报告](archive/progress/05-login.md)。

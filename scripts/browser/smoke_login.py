@@ -11,7 +11,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--url', default='http://127.0.0.1:5173')
     args = parser.parse_args()
-    root = Path(__file__).resolve().parent.parent
+    root = Path(__file__).resolve().parents[2]
     fixture = '\n'.join((root / 'tests/fixtures' / name).read_text(encoding='utf-8')
                         for name in ('native.js', 'chat.js', 'login.js'))
     with sync_playwright() as p:

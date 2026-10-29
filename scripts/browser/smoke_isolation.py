@@ -11,7 +11,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--url', default='http://127.0.0.1:1420')
     args = parser.parse_args()
-    root = Path(__file__).resolve().parents[1]
+    root = Path(__file__).resolve().parents[2]
     translations = json.loads((root / 'src/i18n/zh-CN.json').read_text(encoding='utf-8'))
     fixture = '\n'.join((root / f'tests/fixtures/{name}.js').read_text(encoding='utf-8') for name in ('native', 'chat', 'isolation'))
     output = root / 'test-results/isolation'

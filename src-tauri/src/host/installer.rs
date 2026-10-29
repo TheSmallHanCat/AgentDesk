@@ -57,7 +57,7 @@ impl Installer {
             AppError::new(
                 "E_RESOURCES",
                 "env.plan",
-                "Run scripts/build_host_resources.py before installing Host",
+                "Run scripts/build/build_host_resources.py before installing Host",
             )
         })?;
         let manifest: Value =

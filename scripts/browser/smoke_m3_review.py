@@ -10,7 +10,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--url', default='http://127.0.0.1:1420')
     args = parser.parse_args()
-    root = Path(__file__).resolve().parents[1]
+    root = Path(__file__).resolve().parents[2]
     translations = json.loads((root / 'src/i18n/zh-CN.json').read_text(encoding='utf-8'))
     fixture = (root / 'tests/fixtures/native.js').read_text(encoding='utf-8') + '\n' + (root / 'tests/fixtures/chat.js').read_text(encoding='utf-8')
     fixture += r'''

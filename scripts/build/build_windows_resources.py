@@ -13,7 +13,7 @@ import tempfile
 import urllib.request
 import zipfile
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 ASSETS = (
     {
         "name": "openssh",
@@ -119,7 +119,7 @@ def prepare(output: Path, check_only: bool) -> int:
             print(f"Verified {asset['name']} {asset['version']}")
             continue
         if check_only:
-            raise RuntimeError(f"Missing or modified component: {component}; run python scripts/build_windows_resources.py")
+            raise RuntimeError(f"Missing or modified component: {component}; run python scripts/build/build_windows_resources.py")
         with tempfile.TemporaryDirectory(prefix=".prepare-", dir=output) as temporary:
             staging = Path(temporary)
             archive = staging / "official.zip"

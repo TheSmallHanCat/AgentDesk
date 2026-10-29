@@ -11,15 +11,16 @@ from playwright.sync_api import sync_playwright, expect
 
 
 def main():
-    output = Path("test-results").resolve()
+    root = Path(__file__).resolve().parents[2]
+    output = root / "test-results"
     output.mkdir(exist_ok=True)
-    executable = Path("src-tauri/target/debug/agentdesk.exe").resolve()
+    executable = root / "src-tauri/target/debug/agentdesk.exe"
     with tempfile.TemporaryDirectory(prefix="native-", dir=output) as directory:
         env = os.environ.copy()
         env["AGENTDESK_DATA_ROOT"] = directory
         env["WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"] = "--remote-debugging-port=9227"
         with open(output / "native-startup.log", "w", encoding="utf-8") as log:
-            process = subprocess.Popen([str(executable)], env=env, stdout=log, stderr=log)
+            process = subprocess.Popen([str(executable)], cwd=root, env=env, stdout=log, stderr=log)
             try:
                 for _ in range(40):
                     if process.poll() is not None:

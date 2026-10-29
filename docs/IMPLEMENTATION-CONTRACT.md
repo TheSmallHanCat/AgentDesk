@@ -42,7 +42,7 @@ M0/M1 的历史约束仅适用于相应阶段。M2 扩展以 `docs/M2-CONTRACT.m
 - `sys_hide() -> void`; `sys_exit() -> void`（前端展示未保存编辑器、终端和传输，确认后调用；后端等待传输清理、关闭 PTY、断开 SSH 后退出）；`sys_notify({kind: 'disconnected'|'completed'|'approval', title, body, projectId?: string}) -> void`。
 - 后端收到系统关闭/托盘退出请求，emit `app-close-requested`，载荷 `{ forceExit: boolean }`；由前端执行同一确认流程。通知点击 emit `notification-open`，载荷 `{ projectId?: string }`，并恢复窗口。
 
-## 阶段约束
+## 历史阶段约束（仅适用于 M0/M1）
 
 只建 Python 包和 hello 类型，不提供 Host 业务。M1 项目索引暂存桌面 SQLite；`sessionId` 应为空。未实现页面显示有意义的空状态，无假按钮。浏览器开发模式显示桌面能力说明，不伪造连接成功。
 

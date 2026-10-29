@@ -1,16 +1,16 @@
 # M2 前置技术验证
 
-本目录只放独立实验脚本，不被桌面或 Host 产品构建引用。服务器实际结果以 `.tmp/e2e/spikes.json` 和 `docs/progress/02-fix-and-e2e.md` 为准，不能把脚本存在视为验收通过。
+本目录只放独立实验脚本，不被桌面或 Host 产品构建引用。服务器实际结果以 `.tmp/e2e/spikes.json` 和 `docs/archive/progress/02-fix-and-e2e.md` 为准，不能把脚本存在视为验收通过。
 
 ## 运行
 
-先完成 `scripts/e2e_prepare.py` 提供的专用测试用户、密钥及主机指纹准备，再在本机执行：
+先完成 `scripts/e2e/e2e_prepare.py` 提供的专用测试用户、密钥及主机指纹准备，再在本机执行：
 
 ```bash
 python spikes/e2e_spikes.py
 ```
 
-复用 `scripts/e2e_common.py` 的 Paramiko 连接、端点无关主机指纹固定与结果保存逻辑。本机需要 Paramiko。仅从环境变量读取 `AGENTDESK_E2E_HOST`、`AGENTDESK_E2E_PORT`、`AGENTDESK_E2E_ROOT_USER`、`AGENTDESK_E2E_ROOT_PASSWORD`；缺少任一变量打印变量名并成功跳过。脚本始终以 `agentdesk-test` 连接，不使用 root，不登录 CLI，不发送模型请求。`--skip-cli-install` 可禁止新装 Codex，只检查已有 CLI 与 Python SDK 随附的 Claude。
+复用 `scripts/e2e/e2e_common.py` 的 Paramiko 连接、端点无关主机指纹固定与结果保存逻辑。本机需要 Paramiko。仅从环境变量读取 `AGENTDESK_E2E_HOST`、`AGENTDESK_E2E_PORT`、`AGENTDESK_E2E_ROOT_USER`、`AGENTDESK_E2E_ROOT_PASSWORD`；缺少任一变量打印变量名并成功跳过。脚本始终以 `agentdesk-test` 连接，不使用 root，不登录 CLI，不发送模型请求。`--skip-cli-install` 可禁止新装 Codex，只检查已有 CLI 与 Python SDK 随附的 Claude。
 
 脚本当前只支持已探测的 Linux x86_64 服务器。安装和请求分别限时，公网下载带超时和 SHA256 校验。失败只输出固定阶段、退出码、ABI/网络失败布尔；CLI 的原始认证结果、账号字段、错误原文均不写报告。模型列表只输出数量与字段名，不能把列表非空当作该账号具备模型权限的证明。
 

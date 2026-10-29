@@ -43,7 +43,7 @@
 
 ## 3. E2E 矩阵及本机检查
 
-入口与复现步骤见 `scripts/E2E.md`。五个 `real_server.rs` 分组分别通过 `scripts/e2e_run.py --filter ...` 实际执行，最终均退出 0，共输出 20 条 PASS 和 5 条条件 SKIP。默认 `cargo test` 忽略这五组；缺环境变量的脚本和测试也明确跳过，CI 不依赖服务器。
+入口与复现步骤见 `scripts/e2e/README.md`。五个 `real_server.rs` 分组分别通过 `scripts/e2e/e2e_run.py --filter ...` 实际执行，最终均退出 0，共输出 20 条 PASS 和 5 条条件 SKIP。默认 `cargo test` 忽略这五组；缺环境变量的脚本和测试也明确跳过，CI 不依赖服务器。
 
 | 验收项 | 结果 | 说明 |
 | --- | --- | --- |
@@ -124,7 +124,7 @@ Claude Agent SDK **0.2.174** 安装/导入成功，随 SDK 提供的 Claude **2.
 
 **系统级依赖安装：无。linger：未开启。sshd/防火墙/系统服务配置：未修改。iptables/ss -K：未使用，恢复命令不适用。** 本机黑洞代理在用例结束时取消任务并关闭连接；测试用 Vite 进程也已关闭。
 
-末尾执行 `scripts/e2e_audit.py`，并结合 Spike 自身审计，确认测试归属后台进程、socket/PID 服务文件、远端临时归档归零。本机取消测试也确认 `.part` 归零。普通用户家目录与 authorized_keys 权限分别为 0700、0600。
+末尾执行 `scripts/e2e/e2e_audit.py`，并结合 Spike 自身审计，确认测试归属后台进程、socket/PID 服务文件、远端临时归档归零。本机取消测试也确认 `.part` 归零。普通用户家目录与 authorized_keys 权限分别为 0700、0600。
 
 回滚时可按上述路径识别测试内容；账号、邮件 spool、`~/.agentdesk` 和 CLI 目录的删除超出本次专用目录删除边界，应另行确认后处理。本任务未为了清理而删除这些保留文件，也没有删除或修改其他用户的数据。
 
