@@ -1,0 +1,78 @@
+name: macOS 实验构建
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 已存在的版本标签；仅生成 Apple Silicon 验证包，不发布 Release
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: macos-experimental-${{ inputs.tag }}
+  cancel-in-progress: false
+jobs:
+  macos:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+      CARGO_INCREMENTAL: '0'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: 核对标签
+        id: release
+        run: python scripts/build/release.py metadata --tag "$RELEASE_TAG" --github-output "$GITHUB_OUTPUT"
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@1.96.0
+        with:
+          targets: aarch64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          shared-key: macos-arm64-experimental
+      - uses: astral-sh/setup-uv@v6
+      - run: pnpm install --frozen-lockfile
+      - run: python -m unittest discover -s scripts/tests -v
+      - run: pnpm test
+      - run: python scripts/build/release.py sync-version --tag "$RELEASE_TAG"
+      - run: python scripts/build/build_host_resources.py
+      - name: 生成 macOS 图标
+        run: pnpm tauri icon src-tauri/icons/icon.png --output .tmp/macos-icons
+      - run: pnpm tauri build --ci --no-sign --target aarch64-apple-darwin --bundles app -- --locked
+      - name: 归档 app 并保留执行权限与符号链接
+        env:
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p .tmp/macos-release
+          archive="AgentDesk-${RELEASE_VERSION}-macos-arm64-experimental.app.tar.gz"
+          tar -czf ".tmp/macos-release/$archive" \
+            -C src-tauri/target/aarch64-apple-darwin/release/bundle/macos AgentDesk.app
+          cd .tmp/macos-release
+          shasum -a 256 "$archive" > SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agentdesk-${{ inputs.tag }}-macos-arm64-experimental
+          path: |
+            .tmp/macos-release/*.tar.gz
+            .tmp/macos-release/SHA256SUMS.txt
+          include-hidden-files: true
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14

@@ -1,6 +1,38 @@
 # GitHub 发布准备
 
-公开源码与分发桌面安装包是两个独立步骤。仓库中的 Windows 工作流按需构建未签名安装包并上传 Actions artifact，不自动创建 GitHub Release。
+推送版本标签后，Windows 工作流自动运行工程检查、构建安装包与便携包并发布 GitHub Release。macOS 仅提供独立的手动实验构建，不参与正式发布。
+
+## 标签自动发布
+
+先将代码推送到 GitHub 默认分支，再给准备发布的提交打标签并推送：
+
+```bash
+git tag -a v0.1.0 -m "AgentDesk v0.1.0"
+git push origin v0.1.0
+```
+
+标签必须是 `vMAJOR.MINOR.PATCH`，或带预发布标识，例如 `v0.2.0-rc.1`。预发布标签自动创建 GitHub Pre-release；数字段不能有多余前导零，不接受 `+build` 后缀。标签必须包含本次工作流和发布脚本。
+
+[Windows 构建与发布](../.github/workflows/package.yml) 依次执行：
+
+1. 验证标签格式，固定对应的 commit。
+2. 复用 [工程检查](../.github/workflows/ci.yml)，运行前端、Rust、Host、协议、公开文件与秘密扫描。任何检查失败均停止发布。
+3. 在 CI 工作区同步桌面版本，构建 Windows x64 NSIS 安装包和便携 ZIP，生成 `SHA256SUMS.txt`。
+4. 再次核对标签未移动、验证资产摘要，在草稿中上传全部文件，成功后公开 Release，并附带自动生成的提交说明。
+
+只有发布 job 拥有 `contents: write`，其余 job 只读源码。使用 GitHub 自动提供的 `GITHUB_TOKEN`，无需 PAT、服务器凭据或签名密钥。仓库必须启用 Actions；如果组织策略禁止 Release 写入，需要管理员允许该 job 的权限。
+
+发布资产：
+
+- `AgentDesk-<版本>-windows-x64-setup.exe`
+- `AgentDesk-<版本>-windows-x64-portable.zip`
+- `SHA256SUMS.txt`
+
+便携包包含 Host、OpenSSH、PowerShell 与随包许可文件，通过资源清单逐项核验和收集。不会打包本机应用数据。完整解压到可写目录后运行 `agentdesk.exe`；系统需要 WebView2。便携版数据保存在程序旁的 `data/`，密码和私钥口令仍存于 Windows 凭据管理器，不随目录迁移。
+
+在 Actions 中手动运行“Windows 构建与发布”，输入已有标签，默认只构建并保存 artifact（14 天）；勾选 `publish` 才发布。上传中断时保留草稿，可重跑失败 job；已经公开的 Release 不覆盖，应发布新标签。同一标签的发布串行执行。
+
+不要移动已用于构建或发布的标签。版本同步只修改 CI 临时工作区，不提交回仓库；桌面版本同步覆盖 `package.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml` 和 `src-tauri/Cargo.lock`，Host 版本独立维护。
 
 ## 源码范围
 
@@ -15,6 +47,7 @@
 
 ```bash
 python scripts/check_repository.py
+python -m unittest discover -s scripts/tests -v
 git status --short
 git diff --check
 pnpm test
@@ -31,19 +64,34 @@ cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D w
 
 真实服务器验收不在普通 CI 中执行，不应向 pull request 工作流注入个人服务器密码或正式账号令牌。其范围见 [验收说明](../scripts/e2e/README.md)。
 
-## Windows 构建
+## 本机 Windows 构建
 
 ```bash
 python scripts/build/build_host_resources.py
 python scripts/build/build_windows_resources.py
-pnpm tauri build
+pnpm tauri build --ci --target x86_64-pc-windows-msvc --bundles nsis -- --locked
 ```
 
-构建入口使用锁定依赖和经过摘要核验的官方运行资源。执行 `.github/workflows/package.yml` 可取得安装包和 `SHA256SUMS.txt`；当前产物未签名，发布说明应如实标明。
+构建入口使用锁定依赖和经过摘要核验的官方运行资源。当前产物未签名，Windows 可能显示未知发布者提示；[发布说明模板](../.github/release-notes.md) 如实标明这一点。
 
-版本分别位于 `package.json`、`src-tauri/Cargo.toml`、`src-tauri/tauri.conf.json` 与 `host/pyproject.toml`。桌面和 Host 版本可以不同，但一次发布应说明对应关系及数据库兼容性。
+如果需要在本机复现某个标签的发行包，在独立干净检出中先运行 `python scripts/build/release.py sync-version --tag v0.1.0`，再执行上述构建命令，最后执行 `python scripts/build/release.py collect-windows --tag v0.1.0`。输出在被 Git 忽略的 `.tmp/release/`，输出目录必须为空，避免混入旧资产。
 
 保留 [LICENSE](../LICENSE) 与 [NOTICE](../NOTICE)。分发安装包前，按实际打包的依赖补齐第三方许可文本和版权清单；现有 NOTICE 仅列主要组件。
+
+## macOS 实验构建
+
+在 Actions 中手动运行 [macOS 实验构建](../.github/workflows/macos.yml)，输入包含本次构建配置的已有标签。工作流针对 Apple Silicon（`aarch64-apple-darwin`），生成 `.app.tar.gz` 和 SHA256，并保存 artifact 14 天。归档保留 app 的执行权限与符号链接，仅包含 Host 资源，不携带 Windows 的 OpenSSH / PowerShell。
+
+macOS 不自动触发，不创建 Release，失败也不影响 Windows 发布。当前没有开发者签名、公证或实机验证，系统可能阻止打开；不宣称可直接交付普通用户。首次实机验证需覆盖窗口、托盘、钥匙串、SSH、文件、终端与 Agent 会话，本机执行通道目前仍仅支持 Windows。Intel Mac 暂不构建。
+
+本机 macOS 构建前，先安装前端与 Rust 依赖、准备 Host 资源，再执行：
+
+```bash
+pnpm tauri icon src-tauri/icons/icon.png --output .tmp/macos-icons
+pnpm tauri build --ci --no-sign --target aarch64-apple-darwin --bundles app -- --locked
+```
+
+图标由现有资源转换，生成文件留在 `.tmp/`；图标清晰度和平台行为待实机验证。
 
 ## 发布说明
 

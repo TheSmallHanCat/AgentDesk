@@ -14,6 +14,8 @@
 
 当前以 Windows 为主要验证平台。真实账号登录、模型任务及平台兼容性取决于实际环境；尚未完成的验收项见开发文档和阶段记录。
 
+推送 `v0.1.0` 形式的标签后，GitHub Actions 自动检查并发布 Windows x64 安装包、便携包和 SHA256；`v0.2.0-rc.1` 形式的标签发布为预发布版。macOS 仅提供手动实验构建，尚未完成实机验证。操作方式见 [发布说明](docs/RELEASING.md)。
+
 ## 开发运行
 
 需要 Node.js 24、pnpm 10.33.2、Rust 1.96 的 MSVC 工具链及 Windows SDK、Python 3.12、uv 和 WebView2。
@@ -48,6 +50,7 @@ resources/          发行资源说明与本机构建输出
 scripts/build/      发行资源构建
 scripts/browser/    浏览器交互回归
 scripts/e2e/        真实桌面与服务器验收
+scripts/tests/      发布脚本单元测试
 scripts/check_repository.py  公开文件与文档链接检查
 tests/              前端单元测试与 IPC 夹具
 docs/               开发说明、架构、契约与设计

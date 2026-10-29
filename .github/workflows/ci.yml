@@ -1,8 +1,15 @@
 name: 工程检查
 on:
   push:
+    branches: ['**']
   pull_request:
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      ref:
+        description: Commit to validate
+        required: true
+        type: string
 permissions:
   contents: read
 jobs:
@@ -10,6 +17,9 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
       - uses: pnpm/action-setup@v4
         with:
           version: 10.33.2
@@ -32,6 +42,9 @@ jobs:
     needs: frontend
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@1.96.0
         with:
           components: rustfmt, clippy
@@ -47,12 +60,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
       - uses: astral-sh/setup-uv@v6
       - run: uv sync --project host --frozen
       - run: python scripts/check_repository.py
+      - run: python -m unittest discover -s scripts/tests -v
       - run: python protocol/generate.py --check
       - run: uv run --project host python -m pytest host/tests -q
   secrets:
@@ -60,6 +77,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
           fetch-depth: 0
       - uses: gitleaks/gitleaks-action@v2
         env:

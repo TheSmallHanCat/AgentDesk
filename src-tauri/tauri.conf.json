@@ -32,7 +32,8 @@
     ],
     "resources": {
       "../resources/host/": "resources/host/",
-      "../resources/windows/": "resources/windows/"
+      "../LICENSE": "LICENSE",
+      "../NOTICE": "NOTICE"
     },
     "shortDescription": "SSH 远程开发工作台",
     "license": "AGPL-3.0-only",

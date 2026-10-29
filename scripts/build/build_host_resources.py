@@ -36,7 +36,7 @@ def main():
     version = tomllib.loads((ROOT / "host/pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
     wheel = OUTPUT / f"agentdesk_host-{version}-py3-none-any.whl"
     deps = OUTPUT / "dependencies.txt"
-    subprocess.run(["uv", "export", "--project", str(ROOT / "host"), "--extra", "claude", "--no-dev", "--no-emit-project", "--format", "requirements-txt", "--output-file", str(deps)], cwd=ROOT, check=True, capture_output=True)
+    subprocess.run(["uv", "export", "--frozen", "--project", str(ROOT / "host"), "--extra", "claude", "--no-dev", "--no-emit-project", "--format", "requirements-txt", "--output-file", str(deps)], cwd=ROOT, check=True, capture_output=True)
     metadata = OUTPUT / "python-downloads.json"
     metadata.write_text(json.dumps({"cpython-3.12.15-linux-x86_64-gnu": PYTHON}, indent=2) + "\n", encoding="utf-8")
     manifest = {"version": version, "sdkVersion": "0.2.174", "files": [{"name": "host", "path": wheel.name, "sha256": hashlib.sha256(wheel.read_bytes()).hexdigest()}, {"name": "dependencies", "path": deps.name, "sha256": hashlib.sha256(deps.read_bytes()).hexdigest()}, {"name": "python-metadata", "path": metadata.name, "sha256": hashlib.sha256(metadata.read_bytes()).hexdigest()}, *ASSETS]}

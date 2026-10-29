@@ -163,7 +163,7 @@ impl HostClient {
                 }
             }
         });
-        let hello = client.request("hello", json!({"protocolVersion":"1.0","client":"agentdesk-desktop/0.2.0","deviceId":device_id,"deviceName":"AgentDesk","os":std::env::consts::OS})).await?;
+        let hello = client.request("hello", json!({"protocolVersion":"1.0","client":concat!("agentdesk-desktop/", env!("CARGO_PKG_VERSION")),"deviceId":device_id,"deviceName":"AgentDesk","os":std::env::consts::OS})).await?;
         if hello["protocolVersion"]
             .as_str()
             .and_then(|v| v.split('.').next())
