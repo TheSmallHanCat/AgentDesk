@@ -15,7 +15,7 @@ git push origin v0.1.0
 
 [Windows 构建与发布](../.github/workflows/package.yml) 依次执行：
 
-1. 验证标签格式，固定对应的 commit。
+1. 检查 Tauri 跨端依赖版本，验证标签格式，固定对应的 commit。
 2. 复用 [工程检查](../.github/workflows/ci.yml)，运行前端、Rust、Host、协议、公开文件与秘密扫描。归档脚本的真实进程测试在 Ubuntu 上执行，使用 Linux 的 `setsid`；该检查不生成 Linux 桌面包。任何检查失败均停止发布。
 3. 在 CI 工作区同步桌面版本，构建 Windows x64 NSIS 安装包和便携 ZIP，生成 `SHA256SUMS.txt`。
 4. 再次核对标签未移动、验证资产摘要，在草稿中上传全部文件，成功后公开 Release，并附带自动生成的提交说明。
@@ -47,6 +47,7 @@ git push origin v0.1.0
 
 ```bash
 python scripts/check_repository.py
+python scripts/build/check_tauri_versions.py
 python -m unittest discover -s scripts/tests -v
 git status --short
 git diff --check
@@ -104,6 +105,10 @@ Host 当前数据库格式标识为 `3`。新安装直接创建完整结构，�
 不要将历史测试服务器的结果泛化为所有环境均受支持。
 
 ## 依赖安全检查
+
+Tauri 的 JavaScript 与 Rust 依赖成对固定版本：核心 `@tauri-apps/api` 与 `tauri` 保持相同主版本和小版本，插件两端保持完全相同版本。规则依据 [Tauri 官方依赖更新说明](https://v2.tauri.app/develop/updating-dependencies/#sync-npm-packages-and-cargo-crates-versions)。CLI 独立固定版本，不要求与 Rust crate 补丁号相同。
+
+`python scripts/build/check_tauri_versions.py` 核对 `package.json`、`src-tauri/Cargo.toml` 和 `src-tauri/Cargo.lock`。该检查同时进入普通 CI、Windows 标签发布与 macOS 手动构建，在下载发行资源前阻止版本不一致。更新这组依赖时一并更新两端声明和锁文件；前端安装仍使用 `--frozen-lockfile`，Rust 构建仍使用 `--locked`。
 
 CI 对 npm 生产依赖执行官方 registry 审计，任何级别的告警都会使检查失败。Vue 与 Vue I18n 已更新到修复已知公告的补丁版本；依赖变更需同时更新锁文件并运行界面回归。
 

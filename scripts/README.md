@@ -16,10 +16,13 @@
 python scripts/build/build_host_resources.py
 python scripts/build/build_windows_resources.py --check
 python scripts/check_repository.py
+python scripts/build/check_tauri_versions.py
 python -m unittest discover -s scripts/tests -v
 ```
 
 `build_windows_resources.py --check` 只核验已有资源；首次准备时去掉 `--check`。
+
+`build/check_tauri_versions.py` 只读检查桌面 JavaScript / Rust 的 Tauri 核心及插件版本，发布前运行，不连接网络。
 
 `build/release.py` 用于 CI 中解析标签、同步桌面版本并收集 Windows 安装包、便携包和 SHA256。标签发布与手动构建的完整入口见 [发布说明](../docs/RELEASING.md)。版本同步会修改工作区版本文件，应在 CI 或独立检出中执行；收集产物要求输出目录为空。
 
