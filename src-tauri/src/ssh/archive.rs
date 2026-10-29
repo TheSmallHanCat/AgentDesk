@@ -178,32 +178,9 @@ mod tests {
 
     const MARKER: &str = "agentdesk-archive-regression";
 
-    fn shell_program() -> std::path::PathBuf {
-        if !cfg!(windows) {
-            return "sh".into();
-        }
-        let output = std::process::Command::new("git")
-            .arg("--exec-path")
-            .output()
-            .unwrap();
-        assert!(output.status.success());
-        let git_path = std::path::PathBuf::from(String::from_utf8(output.stdout).unwrap().trim());
-        git_path
-            .ancestors()
-            .flat_map(|path| [path.join("bin/sh.exe"), path.join("usr/bin/sh.exe")])
-            .find(|path| path.is_file())
-            .expect("Windows archive regression requires Git Bash")
-    }
-
-    fn shell_path(path: &std::path::Path) -> String {
-        let path = path.to_string_lossy().replace('\\', "/");
-        if cfg!(windows) && path.as_bytes().get(1) == Some(&b':') {
-            format!("/{}{}", path[..1].to_ascii_lowercase(), &path[2..])
-        } else {
-            path
-        }
-    }
-
+    // These tests execute the server-side Linux process/session contract.
+    // Run them in the linux-archive CI job with a real util-linux setsid.
+    #[cfg(target_os = "linux")]
     async fn actual_archive(authorize: bool, exists: bool) -> std::process::Output {
         use std::process::Stdio;
         use tokio::io::{AsyncBufReadExt, BufReader};
@@ -214,15 +191,14 @@ mod tests {
         // Model the legacy CentOS setsid interface while delegating actual
         // process/session creation to the installed executable.
         std::fs::write(&shim, "#!/bin/sh\ncase \"$1\" in -*) printf 'unsupported setsid option\\n' >&2; exit 64;; esac\nexec \"$REAL_SETSID\" \"$@\"\n").unwrap();
-        #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o700)).unwrap();
         }
         std::fs::write(directory.path().join("payload"), "archive regression").unwrap();
-        let script = format!("REAL_SETSID=$(command -v setsid)\nexport REAL_SETSID\nPATH={}:\"$PATH\"\nexport PATH\n{}",
-            sftp::quote(&shell_path(&bin)), launch_script(MARKER, &shell_path(directory.path()), if exists { "payload" } else { "missing" }));
-        let mut child = tokio::process::Command::new(shell_program())
+        let script = format!("set -e\nREAL_SETSID=$(command -v setsid)\nexport REAL_SETSID\nPATH={}:\"$PATH\"\nexport PATH\n{}",
+            sftp::quote(&bin.to_string_lossy()), launch_script(MARKER, &directory.path().to_string_lossy(), if exists { "payload" } else { "missing" }));
+        let mut child = tokio::process::Command::new("/bin/sh")
             .arg("-s")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -252,13 +228,14 @@ mod tests {
             .unwrap()
     }
 
+    #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn legacy_setsid_without_wait_option_streams_and_propagates_exit_status() {
         use std::process::Stdio;
         let output = actual_archive(true, true).await;
         assert!(output.status.success());
         assert!(output.stdout.starts_with(&[0x1f, 0x8b]));
-        let mut extract = tokio::process::Command::new(shell_program())
+        let mut extract = tokio::process::Command::new("/bin/sh")
             .args(["-c", "tar -xOzf -"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -279,6 +256,7 @@ mod tests {
         assert_eq!(failed.status.code(), Some(2));
     }
 
+    #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn legacy_setsid_cancellation_before_authorization_never_starts_tar() {
         let output = actual_archive(false, true).await;

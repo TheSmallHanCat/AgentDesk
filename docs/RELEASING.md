@@ -16,7 +16,7 @@ git push origin v0.1.0
 [Windows 构建与发布](../.github/workflows/package.yml) 依次执行：
 
 1. 验证标签格式，固定对应的 commit。
-2. 复用 [工程检查](../.github/workflows/ci.yml)，运行前端、Rust、Host、协议、公开文件与秘密扫描。任何检查失败均停止发布。
+2. 复用 [工程检查](../.github/workflows/ci.yml)，运行前端、Rust、Host、协议、公开文件与秘密扫描。归档脚本的真实进程测试在 Ubuntu 上执行，使用 Linux 的 `setsid`；该检查不生成 Linux 桌面包。任何检查失败均停止发布。
 3. 在 CI 工作区同步桌面版本，构建 Windows x64 NSIS 安装包和便携 ZIP，生成 `SHA256SUMS.txt`。
 4. 再次核对标签未移动、验证资产摘要，在草稿中上传全部文件，成功后公开 Release，并附带自动生成的提交说明。
 

@@ -610,11 +610,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn shutdown_keeps_timers_live_while_files_are_locked() {
         use std::os::windows::fs::OpenOptionsExt;
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .join(".tmp");
-        let runtime = tempfile::tempdir_in(root).unwrap();
+        let runtime = tempfile::tempdir().unwrap();
         let file = std::fs::OpenOptions::new()
             .create(true)
             .write(true)
