@@ -37,6 +37,7 @@ export interface ConnectionStatus {
   error?: string
 }
 export interface Project {
+  runtimeMode?: 'direct' | 'isolated'
   deviceLocal?: boolean
   id: string
   connectionId: string

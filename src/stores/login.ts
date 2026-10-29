@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { reactive, ref } from 'vue'
+import { useDataStore } from './data.ts'
 import { Channel } from '@tauri-apps/api/core'
 import { call } from '../utils/api.ts'
 import { sameTarget, target, unwrap } from '../utils/target.ts'
@@ -37,28 +38,45 @@ export const useLoginStore = defineStore('login', () => {
   const dialog = ref<LoginDialog>()
   let revision = 0
   const probes = new Map<string, number>()
-  function setCapabilities(connectionId: string, capabilities: Record<string, AgentCapability>) {
-    probes.set(connectionId, (probes.get(connectionId) ?? 0) + 1)
-    agents[connectionId] = capabilities
+  function scopeKey(connectionId: string, projectId?: string) {
+    const project = useDataStore().projects.find(
+      (value) => value.id === projectId && value.connectionId === connectionId,
+    )
+    return project?.runtimeMode === 'isolated' ? connectionId + ':' + projectId : connectionId
   }
-  function capability(connectionId: string, agent: string) {
-    return agents[connectionId]?.[agent]
+  function capabilities(connectionId: string, projectId?: string) {
+    return agents[scopeKey(connectionId, projectId)] ?? {}
+  }
+  function setCapabilities(
+    connectionId: string,
+    capabilities: Record<string, AgentCapability>,
+    projectId?: string,
+  ) {
+    const key = scopeKey(connectionId, projectId)
+    probes.set(key, (probes.get(key) ?? 0) + 1)
+    agents[key] = capabilities
+  }
+  function capability(connectionId: string, agent: string, projectId?: string) {
+    return capabilities(connectionId, projectId)[agent]
   }
   function updateCapability(owner: Target, agent: string, value?: AgentCapability) {
     if (value) {
-      probes.set(owner.connectionId, (probes.get(owner.connectionId) ?? 0) + 1)
-      ;(agents[owner.connectionId] ??= {})[agent] = value
+      const key = scopeKey(owner.connectionId, owner.projectId)
+      probes.set(key, (probes.get(key) ?? 0) + 1)
+      ;(agents[key] ??= {})[agent] = value
     }
   }
-  async function refresh(connectionId: string) {
-    const request = (probes.get(connectionId) ?? 0) + 1
-    probes.set(connectionId, request)
-    const owner = target(connectionId)
+  async function refresh(connectionId: string, projectId?: string) {
+    const key = scopeKey(connectionId, projectId)
+    const request = (probes.get(key) ?? 0) + 1
+    probes.set(key, request)
+    const owner = target(connectionId, projectId)
     const values = unwrap(
       owner,
       await call<Reply<Record<string, AgentCapability>>>('agent_status', { target: owner }),
     )
-    if (probes.get(connectionId) === request) setCapabilities(connectionId, values)
+    if (probes.get(key) === request && key === scopeKey(connectionId, projectId))
+      setCapabilities(connectionId, values, projectId)
   }
   async function cancelSession(owner: Target, loginId: string) {
     unwrap(
@@ -160,7 +178,7 @@ export const useLoginStore = defineStore('login', () => {
     dialog.value = {
       owner: { ...owner },
       agent,
-      state: agentAuthStatus(capability(owner.connectionId, agent)),
+      state: agentAuthStatus(capability(owner.connectionId, agent, owner.projectId)),
       error: false,
       busy: false,
     }
@@ -206,7 +224,7 @@ export const useLoginStore = defineStore('login', () => {
         const code = typeof error === 'object' && error && 'code' in error ? error.code : ''
         if (code === 'E_NOT_FOUND' || code === 'E_LOGIN_GONE') {
           try {
-            await refresh(current.owner.connectionId)
+            await refresh(current.owner.connectionId, current.owner.projectId)
           } catch {
             if (revision === request && dialog.value === current) current.error = true
           }
@@ -239,7 +257,7 @@ export const useLoginStore = defineStore('login', () => {
       )
       if (revision !== request || dialog.value !== current) return
       updateCapability(current.owner, current.agent, result.capability)
-      if (!result.capability) await refresh(current.owner.connectionId)
+      if (!result.capability) await refresh(current.owner.connectionId, current.owner.projectId)
       if (revision === request && dialog.value === current) current.state = 'loggedOut'
     } catch {
       if (revision === request && dialog.value === current) current.error = true
@@ -248,8 +266,12 @@ export const useLoginStore = defineStore('login', () => {
     }
   }
   function disconnected(connectionId: string) {
-    probes.set(connectionId, (probes.get(connectionId) ?? 0) + 1)
-    delete agents[connectionId]
+    for (const key of new Set([...probes.keys(), ...Object.keys(agents), connectionId])) {
+      if (key === connectionId || key.startsWith(connectionId + ':')) {
+        probes.set(key, (probes.get(key) ?? 0) + 1)
+        delete agents[key]
+      }
+    }
     if (dialog.value?.owner.connectionId !== connectionId) return
     ++revision
     dialog.value.prompt = undefined
@@ -261,6 +283,7 @@ export const useLoginStore = defineStore('login', () => {
     agents,
     dialog,
     capability,
+    capabilities,
     setCapabilities,
     refresh,
     open,

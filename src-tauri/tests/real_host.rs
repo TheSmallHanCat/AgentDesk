@@ -158,6 +158,7 @@ async fn real_host_deploy_stream_approval_stop_reconnect() {
     }
     println!("PASS: m2_native_unlogged_handshake_models_capabilities");
     let project = Project {
+        runtime_mode: "direct".into(),
         device_local: false,
         id: format!("m2_{}", uuid::Uuid::new_v4().simple()),
         connection_id: target.connection_id.clone(),

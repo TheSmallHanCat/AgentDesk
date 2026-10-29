@@ -38,8 +38,6 @@ watch(
           login.disconnected(entry.id)
           if (['disconnected', 'failed'].includes(entry.state))
             void chat.releaseConnection(entry.id)
-        } else if (entry.state === 'connected') {
-          void login.refresh(entry.id).catch(() => {})
         }
       }
       previousConnectionStates.set(entry.id, entry.state)
@@ -151,6 +149,7 @@ function shortcut(event: KeyboardEvent) {
   if (
     matchesShortcut(event, bindings.newTerminal) &&
     project &&
+    project.runtimeMode !== 'isolated' &&
     data.online(project.connectionId)
   ) {
     event.preventDefault()
@@ -262,7 +261,12 @@ onUnmounted(() => {
     ><n-dialog-provider
       ><div class="app-shell">
         <TitleBar @close="requestClose()" /><SideNav />
-        <main class="main-area">
+        <main
+          class="main-area"
+          :class="{
+            'with-dock': route.name === 'workbench' && workspace.dockOpen && !workspace.focus,
+          }"
+        >
           <n-alert v-if="startupError" type="error" closable @close="startupError = ''">{{
             startupError
           }}</n-alert>

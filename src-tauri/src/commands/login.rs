@@ -65,13 +65,30 @@ fn login_client(state: &AppState, target: &Target, login_id: &str) -> AppResult<
         })
 }
 
+async fn scoped_client(state: &AppState, target: &Target) -> AppResult<Arc<HostClient>> {
+    if target.project_id.is_some() {
+        crate::commands::session::project_client(state, target).await
+    } else {
+        state.hosts.client(&state.ssh, &state.db, target).await
+    }
+}
+fn scoped_params(target: &Target, mut params: Value) -> Value {
+    if let Some(id) = &target.project_id {
+        params["projectId"] = json!(id);
+    }
+    params
+}
 #[tauri::command]
 pub async fn agent_status(
     state: tauri::State<'_, AppState>,
     target: Target,
 ) -> AppResult<Reply<Value>> {
-    let client = state.hosts.client(&state.ssh, &state.db, &target).await?;
-    Ok(target.reply(client.request("agent.status", json!({})).await?))
+    let client = scoped_client(&state, &target).await?;
+    Ok(target.reply(
+        client
+            .request("agent.status", scoped_params(&target, json!({})))
+            .await?,
+    ))
 }
 
 #[tauri::command]
@@ -81,11 +98,14 @@ pub async fn agent_login_start(
     agent: String,
     on_events: tauri::ipc::Channel<Value>,
 ) -> AppResult<Reply<Value>> {
-    let client = state.hosts.client(&state.ssh, &state.db, &target).await?;
+    let client = scoped_client(&state, &target).await?;
     // Subscribe before start: even prompts emitted before the RPC response remain live.
     let mut receiver = client.login_events.subscribe();
     let started = client
-        .request("login.start", json!({"agent":agent}))
+        .request(
+            "login.start",
+            scoped_params(&target, json!({"agent":agent})),
+        )
         .await?;
     let login_id = started_login_id(&client.cancel, &started, &agent)?;
     state
@@ -178,10 +198,13 @@ pub async fn agent_logout(
     target: Target,
     agent: String,
 ) -> AppResult<Reply<Value>> {
-    let client = state.hosts.client(&state.ssh, &state.db, &target).await?;
+    let client = scoped_client(&state, &target).await?;
     Ok(target.reply(
         client
-            .request("agent.logout", json!({"agent":agent}))
+            .request(
+                "agent.logout",
+                scoped_params(&target, json!({"agent":agent})),
+            )
             .await?,
     ))
 }

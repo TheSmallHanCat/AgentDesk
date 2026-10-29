@@ -43,6 +43,29 @@ S1 验证真实 russh 正反向 streamlocal、0600 权限和本机回环 TCP ech
 
 Windows agent 只在既有服务可用时添加测试密钥，结束后移除；不启动或更改服务。Pageant、原生输入法、缩放、通知、安装包及长期性能仍需要人工验证，不能由协议测试推定通过。
 
+## 工作台交互回归
+
+启动 `pnpm dev --host 127.0.0.1` 后，运行：
+
+```bash
+python scripts/smoke_workflow.py --url http://127.0.0.1:1420
+```
+
+使用隔离 IPC 数据验证空会话创建、环境目标保持、返回会话与草稿恢复、项目默认值、能力刷新、本机权限限制、迟到创建响应及 980×680 窗口的聊天与终端布局。截图与结果写入 `test-results/workflow/`，不连接真实服务器、不完成 Agent 登录、不发送模型请求。
+
+`host/tests/test_process_environment.py` 使用临时进程检查 SSH 连接元数据过滤、服务器配置保留、官方终端参数转义和远端运行上下文。Windows 可通过 Git Bash 验证 CLI 包装器，登录 PTY 项目只在 Unix 执行。`smoke_workflow.py` 同时核对 Agent、项目及终端位置；`smoke_login.py` 核对本机浏览器授权说明及显式打开行为。
+
+## 隔离工作区回归
+
+```bash
+uv run --project host python -m pytest host/tests/test_isolation.py host/tests/test_isolation_image.py -q
+python scripts/smoke_isolation.py --url http://127.0.0.1:1420
+```
+
+Python 用例验证容器策略、旧数据库升级、真实 stdio Worker 的审批与停止、未知送达状态、登录归属、空闲回收及清理失败。浏览器用例验证隔离能力缓存、禁止宿主终端、明确选择运行方式及缺少镜像时禁止保存；均不访问真实模型服务。
+
+`scripts/prepare_isolation_image.py` 默认只准备经过校验的镜像上下文。已有镜像的 Linux 实机边界检查使用 `scripts/smoke_isolation_runtime.py --image IMAGE_ID`，不登录或调用模型。具体前置与回退说明见 [隔离工作区契约](../docs/ISOLATION-CONTRACT.md)。
+
 ## M2 Spike 与残留
 
 第二部分结束后执行 `python spikes/e2e_spikes.py`，详见 `spikes/README.md`。它只安装到专用用户下，绝不登录或发送模型提示词。

@@ -49,6 +49,7 @@ export interface HelloResult {
   hostId: string;
   capabilities: Record<string, AgentCapability>;
   currentSeq: number;
+  features?: RuntimeFeatures;
 }
 
 export interface HelloRequest {
@@ -62,6 +63,10 @@ export interface HelloResponse {
   jsonrpc: "2.0";
   id: number;
   result: HelloResult;
+}
+
+export interface RuntimeFeatures {
+  isolatedRuntime?: number;
 }
 
 export type JsonValue = unknown;
@@ -98,6 +103,8 @@ export interface Session {
   deviceId?: string | null;
   projectPath?: string;
   executionPolicy?: JsonValue;
+  runtimeMode?: RuntimeMode;
+  runtimeId?: string | null;
 }
 
 export interface HostProject {
@@ -110,6 +117,8 @@ export interface HostProject {
   archived?: boolean;
   nativeRoot?: string | null;
   deviceId?: string | null;
+  runtimeMode?: RuntimeMode;
+  runtimeId?: string | null;
 }
 
 export interface QuestionOption {
@@ -194,9 +203,11 @@ export interface AgentQuestion {
 }
 
 export interface EnvProbeParams {
+  projectId?: string;
 }
 
 export interface AgentStatusParams {
+  projectId?: string;
 }
 
 export interface ProjectListParams {
@@ -209,6 +220,7 @@ export interface ProjectUpsertParams {
   defaultAgent?: string;
   kind?: "remote" | "local";
   deviceId?: string;
+  runtimeMode?: RuntimeMode;
 }
 
 export interface ProjectArchiveParams {
@@ -327,9 +339,10 @@ export type RunCompactParams = Record<string, JsonValue>;
 
 export interface AgentLogoutParams {
   agent: string;
+  projectId?: string;
 }
 
-export type ProtocolErrorCode = "E_PROTOCOL_VERSION" | "E_NOT_LOGGED_IN" | "E_AGENT_NOT_INSTALLED" | "E_SESSION_BUSY" | "E_NATIVE_MISSING" | "E_DEVICE_OFFLINE" | "E_TUNNEL_NOT_READY" | "E_CAPABILITY" | "E_ALREADY_RESOLVED" | "E_INVALID_PARAMS" | "E_NOT_FOUND" | "E_CONFLICT" | "E_FRAME_TOO_LARGE" | "E_INTERNAL" | "E_METHOD_NOT_FOUND" | "E_AGENT" | "E_HOST_DRAINING" | "E_AGENT_EXITED" | "E_TIMEOUT" | "E_CLI_VERSION" | "E_SANDBOX" | "E_AGENT_PROBE" | "E_AGENT_EXECUTABLE" | "E_LOGIN_BUSY" | "E_LOGIN_GONE" | "E_LOGIN_STATE" | "E_LOGIN_INPUT" | "E_LOGIN_PROTOCOL" | "E_LOGIN_FAILED" | "E_LOGIN_VERIFY" | "E_LOGIN_EXPIRED" | "E_LOGIN_CANCELLED" | "E_NATIVE_UNSUPPORTED" | "E_TARGET" | "E_LOGOUT_VERIFY";
+export type ProtocolErrorCode = "E_PROTOCOL_VERSION" | "E_NOT_LOGGED_IN" | "E_AGENT_NOT_INSTALLED" | "E_SESSION_BUSY" | "E_NATIVE_MISSING" | "E_DEVICE_OFFLINE" | "E_TUNNEL_NOT_READY" | "E_CAPABILITY" | "E_ALREADY_RESOLVED" | "E_INVALID_PARAMS" | "E_NOT_FOUND" | "E_CONFLICT" | "E_FRAME_TOO_LARGE" | "E_INTERNAL" | "E_METHOD_NOT_FOUND" | "E_AGENT" | "E_HOST_DRAINING" | "E_AGENT_EXITED" | "E_TIMEOUT" | "E_CLI_VERSION" | "E_SANDBOX" | "E_AGENT_PROBE" | "E_AGENT_EXECUTABLE" | "E_LOGIN_BUSY" | "E_LOGIN_GONE" | "E_LOGIN_STATE" | "E_LOGIN_INPUT" | "E_LOGIN_PROTOCOL" | "E_LOGIN_FAILED" | "E_LOGIN_VERIFY" | "E_LOGIN_EXPIRED" | "E_LOGIN_CANCELLED" | "E_NATIVE_UNSUPPORTED" | "E_TARGET" | "E_LOGOUT_VERIFY" | "E_RUNTIME_PLATFORM" | "E_RUNTIME_MISSING" | "E_RUNTIME_IMAGE" | "E_RUNTIME_ROOTLESS" | "E_RUNTIME_LIMITS" | "E_RUNTIME_UNAVAILABLE" | "E_RUNTIME_PROTOCOL" | "E_RUNTIME_PATH" | "E_RUNTIME_MODE" | "E_RUNTIME_POLICY" | "E_RUNTIME_PROBE" | "E_RUNTIME_AGENT" | "E_RUNTIME_TERMINAL" | "E_RUNTIME_EXITED" | "E_RUNTIME_TIMEOUT" | "E_RUNTIME_WORKER" | "E_RUNTIME_CONTROL" | "E_RUNTIME_BUSY" | "E_RUNTIME_LIMIT";
 
 export interface ApprovalServerRequest {
   jsonrpc: "2.0";
@@ -377,6 +390,7 @@ export interface DeviceOfflineParams {
 
 export interface AgentTerminalStartParams {
   agent: string;
+  projectId?: string;
 }
 
 export interface DeviceRegisterResult {
@@ -392,6 +406,7 @@ export interface DeviceTunnelReadyResult {
 
 export interface LoginStartParams {
   agent: string;
+  projectId?: string;
 }
 
 export interface LoginStartResult {
@@ -447,4 +462,27 @@ export interface DeviceProjectParams {
 
 export interface DeviceProjectResult {
   enabled: boolean;
+}
+
+export type RuntimeMode = "direct" | "isolated";
+
+export interface RuntimeStatus {
+  supported: boolean;
+  state: string;
+  reason?: string;
+  agents: Array<string>;
+}
+
+export interface WorkerSession {
+  id: string;
+  agent: string;
+  model: string;
+  permissionMode: string;
+  nativeId?: string | null;
+}
+
+export interface WorkerRequest {
+  id: number;
+  method: "probe" | "capabilities" | "native.exists" | "run.start" | "run.append" | "run.stop" | "login.start" | "login.respond" | "login.cancel" | "logout";
+  params: JsonValue;
 }

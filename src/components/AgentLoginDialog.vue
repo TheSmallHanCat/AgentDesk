@@ -91,12 +91,13 @@ function close() {
       <p v-if="current.state === 'loggedIn'" class="muted">
         {{ t('login.accountType') }} ·
         {{
-          login.capability(current.owner.connectionId, current.agent)?.accountType ??
-          t('login.accountUnknown')
+          login.capability(current.owner.connectionId, current.agent, current.owner.projectId)
+            ?.accountType ?? t('login.accountUnknown')
         }}
       </p>
       <p v-if="active" class="muted">{{ t('login.instructions') }}</p>
       <section v-if="url" class="login-link">
+        <p class="muted login-browser-privacy">{{ t('login.browserPrivacy') }}</p>
         <p class="mono login-url">{{ url }}</p>
         <div class="actions">
           <n-button type="primary" data-testid="login-open-browser" @click="browse">{{

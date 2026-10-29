@@ -151,6 +151,15 @@ fn resources(app: &tauri::AppHandle) -> AppResult<std::path::PathBuf> {
         .map_err(|e| AppError::io("env.resources", e))
 }
 #[tauri::command]
+pub async fn runtime_status(
+    state: tauri::State<'_, AppState>,
+    target: Target,
+) -> AppResult<Reply<Value>> {
+    let client = state.hosts.client(&state.ssh, &state.db, &target).await?;
+    Ok(target.reply(client.request("runtime.status", json!({})).await?))
+}
+
+#[tauri::command]
 pub async fn env_probe(
     state: tauri::State<'_, AppState>,
     app: tauri::AppHandle,
@@ -206,7 +215,18 @@ pub async fn env_probe(
     if values.get("socket") == Some(&"present") {
         match state.hosts.client(&state.ssh, &state.db, &target).await {
             Ok(client) => {
-                let probe = client.request("env.probe", json!({})).await?;
+                let scoped = if target.project_id.is_some() {
+                    crate::commands::session::project_client(&state, &target).await?
+                } else {
+                    client
+                };
+                let mut params = json!({});
+                if let Some(id) = &target.project_id {
+                    params["projectId"] = json!(id);
+                }
+                let probe = scoped.request("env.probe", params).await?;
+                result["runtime"] = probe["runtime"].clone();
+                result["isolation"] = probe["isolation"].clone();
                 result["agents"] = probe["agents"].clone();
                 result["host"] = probe["host"].clone();
                 let mut additional = Vec::new();
@@ -221,12 +241,14 @@ pub async fn env_probe(
                     };
                     additional.push(json!({"name":format!("{prefix}Login"),"status":login_status,"detail":caps["reason"].as_str().unwrap_or("ready")}));
                 }
-                let caps = &probe["agents"]["codex"];
-                for (name, field) in [
-                    ("codexResources", "resourcesAvailable"),
-                    ("codexSandbox", "sandboxAvailable"),
-                ] {
-                    additional.push(json!({"name":name,"status":if caps[field]==true {"ready"} else {"failed"},"detail":if caps[field]==true {"ready"} else {"E_SANDBOX"}}));
+                if probe["runtime"]["mode"] != "isolated" {
+                    let caps = &probe["agents"]["codex"];
+                    for (name, field) in [
+                        ("codexResources", "resourcesAvailable"),
+                        ("codexSandbox", "sandboxAvailable"),
+                    ] {
+                        additional.push(json!({"name":name,"status":if caps[field]==true {"ready"} else {"failed"},"detail":if caps[field]==true {"ready"} else {"E_SANDBOX"}}));
+                    }
                 }
                 if let Some(layers) = result["layers"].as_array_mut() {
                     layers.extend(additional);

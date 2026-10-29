@@ -406,6 +406,7 @@ async fn real_device_reverse_native_reconnect_sandbox_wait_grace_cleanup() {
     let local_path = root.join(".tmp/e2e/local-project/reverse-channel");
     std::fs::create_dir_all(&local_path).unwrap();
     let project = Project {
+        runtime_mode: "direct".into(),
         device_local: true,
         id: format!("m3_{}", uuid::Uuid::new_v4().simple()),
         connection_id: target.connection_id.clone(),

@@ -283,6 +283,7 @@ async fn real_files_terminals_and_downloads() {
     let c = env.ordinary();
     let mut t = context.connect(&c, env.credential(&c)).await;
     let root = Project {
+        runtime_mode: "direct".into(),
         device_local: false,
         id: "e2e-project".into(),
         connection_id: c.id.clone(),
@@ -298,6 +299,7 @@ async fn real_files_terminals_and_downloads() {
     };
     must(context.db.save_project(&root));
     must(context.db.save_project(&Project {
+        runtime_mode: "direct".into(),
         device_local: false,
         id: "second-project".into(),
         path: format!("{BASE}/another-project"),

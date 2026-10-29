@@ -22,10 +22,8 @@ const device = useDeviceStore()
 const canSend = computed(
   () =>
     !chat.selected(props.project)?.archived &&
-    !!chat.agents[props.project.connectionId]?.[chat.selected(props.project)?.agent ?? '']
-      ?.loggedIn &&
-    !!chat.agents[props.project.connectionId]?.[chat.selected(props.project)?.agent ?? '']
-      ?.available &&
+    !!chat.capabilities(props.project)[chat.selected(props.project)?.agent ?? '']?.loggedIn &&
+    !!chat.capabilities(props.project)[chat.selected(props.project)?.agent ?? '']?.available &&
     (!props.project.deviceLocal ||
       (device.state(props.project).enabled && device.state(props.project).state === 'ready')),
 )
@@ -188,11 +186,18 @@ const context = computed(() => {
       <h2>{{ t('chat.startTitle') }}</h2>
       <p>{{ t('chat.startHelp') }}</p>
       <n-button
-        :disabled="!data.online(project.connectionId) || !canSend"
+        :disabled="!data.online(project.connectionId)"
         type="primary"
         @click="emit('create')"
         >{{ t('chat.newSession') }}</n-button
-      ><router-link to="/environment">{{ t('environment.title') }}</router-link>
+      ><router-link
+        :to="{
+          name: 'environment',
+          params: { connectionId: project.connectionId },
+          query: { projectId: project.id },
+        }"
+        >{{ t('environment.title') }}</router-link
+      >
     </div>
     <div v-else class="conversation" :aria-label="t('chat.conversation')">
       <header class="conversation-head">
@@ -205,7 +210,7 @@ const context = computed(() => {
             :project-id="project.id"
             :session-id="session.id"
             :device-local="project.deviceLocal"
-            :capability="chat.agents[project.connectionId]?.[session.agent]"
+            :capability="chat.capabilities(project)[session.agent]"
             :disabled="!data.online(project.connectionId)"
           />
         </div>
@@ -267,11 +272,12 @@ const context = computed(() => {
                 <div>{{ item.payload.text }}</div>
                 <small>{{
                   t(
-                    item.payload.delivery === 'undelivered'
-                      ? 'chat.delivery.undelivered'
+                    ['undelivered', 'unknown'].includes(String(item.payload.delivery))
+                      ? 'chat.delivery.' + String(item.payload.delivery)
                       : 'chat.delivery.delivered',
                   )
                 }}</small>
+                <p v-if="item.payload.delivery === 'unknown'">{{ t('chat.unknownHelp') }}</p>
               </div>
               <ApprovalCard
                 v-else-if="item.type === 'approval.request'"
@@ -592,6 +598,21 @@ const context = computed(() => {
 }
 .chat-empty h2 {
   font-size: 20px;
+}
+@media (max-height: 760px) {
+  .composer {
+    padding: 8px;
+    margin-bottom: 6px;
+  }
+  .composer textarea {
+    height: 48px;
+    min-height: 48px;
+    max-height: 100px;
+  }
+  .conversation-head {
+    padding-top: 10px;
+    padding-bottom: 10px;
+  }
 }
 @media (max-width: 900px) {
   .message-row {

@@ -95,6 +95,7 @@ pub fn run() {
             commands::device::device_enable,
             commands::device::device_revoke,
             commands::env::env_probe,
+            commands::env::runtime_status,
             commands::env::env_install_plan,
             commands::env::env_install_run,
             commands::env::env_install_cancel,

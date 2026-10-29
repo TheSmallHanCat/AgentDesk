@@ -106,6 +106,8 @@ impl ConnectionStatus {
 pub struct Project {
     #[serde(default)]
     pub device_local: bool,
+    #[serde(default = "direct_runtime")]
+    pub runtime_mode: String,
     pub id: String,
     pub connection_id: String,
     pub name: String,
@@ -117,6 +119,9 @@ pub struct Project {
     pub pinned: bool,
     pub archived: bool,
     pub last_opened_at: Option<u64>,
+}
+fn direct_runtime() -> String {
+    "direct".into()
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]

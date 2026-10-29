@@ -57,8 +57,10 @@ src-tauri/     Rust SSH、PTY、SFTP、SQLite、系统凭据与桌面生命周�
 host/          Python 3.12 Host、SQLite、官方适配器与 Fake Agent
 protocol/      JSON Schema、握手样例与三端类型生成
 scripts/       检查与浏览器验证
-docs/          接口约定、问题与进度报告
+docs/          设计文档、接口约定、问题与进度报告
 ```
+
+现行需求与设计集中在 `docs/design/`：[主设计](docs/design/远程开发工作台需求设计-Claude版.md)、[需求文档](docs/design/远程开发工作台需求文档.md)、[布局规范](docs/design/前端布局与交互规范.md)。主设计第 1 节决策记录优先。
 
 数据目录优先级：`AGENTDESK_DATA_ROOT` → 开发模式 `.agentdesk-data/` → 便携版可执行文件旁 `agentdesk.portable` 标记对应的 `data/` → 系统配置目录 `AgentDesk/`（Windows 为 `%APPDATA%/AgentDesk/`）。可以使用环境变量指定隔离测试目录，不要把个人路径写进代码。
 
@@ -67,6 +69,16 @@ docs/          接口约定、问题与进度报告
 初始交付见 [任务 01 报告](docs/progress/01-M0-M1.md)，审查修复与真实环境结果见 [任务 02 报告](docs/progress/02-fix-and-e2e.md)。M2 实测与限制见 [任务 03 报告](docs/progress/03-M2.md)。可重复验收入口见 [E2E 说明](scripts/E2E.md)。本地 SSH 测试服务只监听回环地址、每次生成临时主机密钥，不依赖用户账号。
 
 浏览器验证脚本需要额外安装 Playwright 和 Chromium；启动 `pnpm dev --host 127.0.0.1` 后，可运行 `python scripts/smoke_ui.py` 与 `python scripts/smoke_workbench.py`。后者使用测试专属 IPC 数据，不连接外网。构建 Windows debug 程序后，`python scripts/smoke_native.py` 使用隔离数据目录验证真实 WebView 与 IPC；截图写入被忽略的 `test-results/`。日常 `pnpm test` 不需要 Playwright。
+
+## 服务器工作区的数据边界
+
+主要使用方式是项目、工具链和官方 Agent 均放在远端 VPS，本机通过 SSH 使用文件、终端和聊天界面。该流程选择“服务器普通环境”，无需 Podman 或 cgroup v2，也无需开启本机执行通道。容器隔离是另一个可选运行方式，不是普通远程使用的安装前提。
+
+远端项目的 Agent、文件和项目命令在服务器运行，本机界面分别标明 Agent 与项目位置。官方 Agent 子进程启动时排除 `SSH_CONNECTION`、`SSH_CLIENT`、`SSH_TTY`、`SSH_ORIGINAL_COMMAND`，减少 SSH 连接元数据的继承；服务器认证、代理、时区、语言和工具链配置保持原样。普通 Shell 终端仍提供服务器原生环境。
+
+这项过滤不构成进程或文件系统隔离，不能阻止同用户程序读取宿主信息。若要进一步限制 Agent 读取 Host 连接资料，需要独立运行身份或隔离执行环境。本机执行通道仍需用户显式授权；官方登录链接在本机浏览器打开，浏览器访问不属于服务器运行环境的隔离范围。
+
+新建远端项目可选择“服务器隔离工作区”，使用 rootless Podman、独立持久 HOME 和限定项目挂载。首期支持 Claude，前置条件或实际边界检查失败时拒绝运行。配置、镜像准备、限制与 Linux 实机验收见 [隔离工作区契约](docs/ISOLATION-CONTRACT.md)。已有项目默认保持普通运行方式。
 
 ## 本机模式安全边界（A-03）
 

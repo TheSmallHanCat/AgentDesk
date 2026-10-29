@@ -8,7 +8,7 @@ import os
 from collections.abc import Awaitable, Callable
 
 from .base import AdapterError
-from .native_common import MAX_FRAME, close_process
+from .native_common import MAX_FRAME, close_process, native_environment
 
 
 class NativeRpc:
@@ -29,6 +29,7 @@ class NativeRpc:
             *([self.executable] if isinstance(self.executable, str) else self.executable), *self.config, "app-server", "--listen", "stdio://",
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL, start_new_session=os.name == "posix",
+            env=native_environment(),
             limit=MAX_FRAME,
         )
         self.reader_task = asyncio.create_task(self._read())

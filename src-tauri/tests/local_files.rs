@@ -23,6 +23,7 @@ fn local_files_keep_ownership_roots_conflicts_and_native_content() {
     })
     .unwrap();
     let project = Project {
+        runtime_mode: "direct".into(),
         device_local: true,
         id: "p".into(),
         connection_id: "c".into(),
@@ -173,6 +174,7 @@ fn wide_local_projects_cannot_modify_canonical_home_or_system_paths() {
         .to_path_buf();
     let root = home.ancestors().last().unwrap();
     let mut project = Project {
+        runtime_mode: "direct".into(),
         device_local: true,
         id: "wide".into(),
         connection_id: "c".into(),

@@ -120,3 +120,18 @@ test('undelivered input updates its original user message across reversed histor
   assert.equal(state.items[0].payload.delivery, 'undelivered')
   assert.equal(state.items[0].payload.text, 'Queued')
 })
+test('worker loss preserves unknown delivery on the original input', () => {
+  const state = timeline()
+  applyEvents(state, [event(2, 'user.message', { clientMsgId: 'm', text: 'Queued' })])
+  applyEvents(state, [
+    event(
+      3,
+      'item.completed',
+      { kind: 'user_input', delivery: 'unknown', clientMsgId: 'm', text: 'Queued' },
+      'input_m',
+    ),
+  ])
+  assert.equal(state.items.length, 1)
+  assert.equal(state.items[0].type, 'user.message')
+  assert.equal(state.items[0].payload.delivery, 'unknown')
+})

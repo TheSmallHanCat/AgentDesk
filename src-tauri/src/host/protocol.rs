@@ -81,6 +81,8 @@ pub struct HelloResult {
     pub host_id: String,
     pub capabilities: std::collections::BTreeMap<String, AgentCapability>,
     pub current_seq: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub features: Option<RuntimeFeatures>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -98,6 +100,13 @@ pub struct HelloResponse {
     pub jsonrpc: String,
     pub id: i64,
     pub result: HelloResult,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeFeatures {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub isolated_runtime: Option<i64>,
 }
 
 pub type JsonValue = serde_json::Value;
@@ -150,6 +159,10 @@ pub struct Session {
     pub project_path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub execution_policy: Option<JsonValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_mode: Option<RuntimeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_id: Option<serde_json::Value>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -170,6 +183,10 @@ pub struct HostProject {
     pub native_root: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub device_id: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_mode: Option<RuntimeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_id: Option<serde_json::Value>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -288,11 +305,17 @@ pub struct AgentQuestion {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct EnvProbeParams {}
+pub struct EnvProbeParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct AgentStatusParams {}
+pub struct AgentStatusParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -310,6 +333,8 @@ pub struct ProjectUpsertParams {
     pub kind: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub device_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_mode: Option<RuntimeMode>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -477,6 +502,8 @@ pub type RunCompactParams = std::collections::BTreeMap<String, JsonValue>;
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AgentLogoutParams {
     pub agent: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
 }
 
 pub type ProtocolErrorCode = String;
@@ -550,6 +577,8 @@ pub struct DeviceOfflineParams {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AgentTerminalStartParams {
     pub agent: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -571,6 +600,8 @@ pub struct DeviceTunnelReadyResult {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct LoginStartParams {
     pub agent: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -651,4 +682,35 @@ pub struct DeviceProjectParams {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DeviceProjectResult {
     pub enabled: bool,
+}
+
+pub type RuntimeMode = String;
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeStatus {
+    pub supported: bool,
+    pub state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    pub agents: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkerSession {
+    pub id: String,
+    pub agent: String,
+    pub model: String,
+    pub permission_mode: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_id: Option<serde_json::Value>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkerRequest {
+    pub id: i64,
+    pub method: String,
+    pub params: JsonValue,
 }

@@ -260,6 +260,8 @@ impl Db {
                 project.path.starts_with('/')
             })
             || project.default_agent.is_empty()
+            || !["direct", "isolated"].contains(&project.runtime_mode.as_str())
+            || (project.device_local && project.runtime_mode != "direct")
             || project.default_agent.len() > 64
             || !project
                 .default_agent
@@ -275,19 +277,22 @@ impl Db {
         }
         let conn = self.lock()?;
         let existing: Option<String> = conn
-            .query_row(
-                "SELECT connection_id FROM projects WHERE id=?",
-                [&project.id],
-                |r| r.get(0),
-            )
+            .query_row("SELECT data FROM projects WHERE id=?", [&project.id], |r| {
+                r.get(0)
+            })
             .optional()
             .map_err(db_error)?;
-        if existing.is_some_and(|id| id != project.connection_id) {
-            return Err(AppError::new(
-                "E_TARGET",
-                "project",
-                "Project connection cannot be changed",
-            ));
+        if let Some(data) = existing {
+            let old: Project = serde_json::from_str(&data).map_err(db_error)?;
+            if old.connection_id != project.connection_id
+                || old.runtime_mode != project.runtime_mode
+            {
+                return Err(AppError::new(
+                    "E_TARGET",
+                    "project",
+                    "Project connection and runtime cannot be changed",
+                ));
+            }
         }
         conn.execute("INSERT INTO projects(id,connection_id,data) VALUES(?1,?2,?3) ON CONFLICT(id) DO UPDATE SET data=excluded.data", params![project.id,project.connection_id,serde_json::to_string(project).map_err(db_error)?]).map_err(db_error)?;
         Ok(())
@@ -388,6 +393,7 @@ mod tests {
             db.save_connection(&connection(id)).unwrap();
         }
         let p = Project {
+            runtime_mode: "direct".into(),
             device_local: false,
             id: "p".into(),
             connection_id: "a".into(),

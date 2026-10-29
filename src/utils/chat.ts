@@ -29,7 +29,8 @@ export function timeline(): ChatTimeline {
 export function applyEvents(state: ChatTimeline, events: HostEvent[]) {
   for (const source of events) {
     const event =
-      source.type === 'item.completed' && source.payload.delivery === 'undelivered'
+      source.type === 'item.completed' &&
+      ['undelivered', 'unknown'].includes(String(source.payload.delivery))
         ? { ...source, type: 'user.message', itemId: 'message:' + source.payload.clientMsgId }
         : source
     const snapshot = event.payload.snapshot === true

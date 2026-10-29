@@ -196,6 +196,9 @@
         "currentSeq": {
           "type": "integer",
           "minimum": 0
+        },
+        "features": {
+          "$ref": "#/$defs/RuntimeFeatures"
         }
       },
       "required": [
@@ -252,6 +255,15 @@
         "id",
         "result"
       ]
+    },
+    "RuntimeFeatures": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "isolatedRuntime": {
+          "type": "integer"
+        }
+      }
     }
   },
   "oneOf": [

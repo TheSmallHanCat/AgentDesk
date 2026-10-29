@@ -16,7 +16,7 @@ const props = defineProps<{
 const { t } = useI18n()
 const login = useLoginStore()
 const capability = computed(
-  () => login.capability(props.connectionId, props.agent) ?? props.capability,
+  () => login.capability(props.connectionId, props.agent, props.projectId) ?? props.capability,
 )
 const state = computed(() => agentAuthStatus(capability.value))
 function open() {

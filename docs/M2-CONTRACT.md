@@ -20,9 +20,11 @@
 - `agent.status({}) -> capabilities`；`env.probe({}) -> object`；尚未实现的 P1 方法返回 E_CAPABILITY，不提供虚假业务成功；已实现 M3 接口见补充契约。
 - `login.start({agent}) -> {loginId,agent}`：Host 管理官方登录进程，每个 Agent 最多一个，归属发起请求的连接 Client。`login.respond({loginId,text}) -> {accepted:true}` 转交单行输入；`login.cancel({loginId}) -> {accepted:true}` 结束进程组并关闭 PTY/app-server。旧 `agent.login.start` 已移除。
 - `login.prompt` / `login.state` 为独立 JSON-RPC 实时通知（不是 HostEvent，不分配 seq、不写 events/blob/日志、不进入 sync.since）。params 包含 loginId/agent；prompt 可带 url/deviceCode/needsInput/rawOutput，state 包含 starting/waiting/succeeded/failed/expired/cancelled 及固定安全原因码、刷新后的 capability。断线立即作废，重连重新开始。
-- 能力包含 `authStatus=missing|loggedOut|loggedIn|failed|checking`、公开 `accountType`；hello 异步启动探测，agent.status/env.probe 等待探测完成。CLI 退出清除缓存后重新检测，成功以实际登录状态为准。
+- 能力包含 `authStatus=missing|loggedOut|loggedIn|failed|checking`、公开 `accountType`；hello 只返回已有缓存，不启动 CLI。agent.status/env.probe 在指定项目的运行环境内触发并等待探测；未指定项目时检查普通环境。CLI 退出清除缓存后重新检测，成功以实际登录状态为准。
 - `agent.logout({agent}) -> {loggedOut:true,capability}` 仅显式确认后调用官方退出命令；有活动运行或登录会话时拒绝。
 - `host.prepareShutdown({}) -> {prepared:true,leaseSeconds:60}` 原子进入维护状态，活跃运行时拒绝；租约内 run.send 返回 E_HOST_DRAINING。`host.cancelShutdown({}) -> {cancelled:true}` 由同设备解除。SSH 停机/升级/回滚先获取该屏障，连接丢失后租约仍有效，超时自动恢复接收。
+
+可选的 `runtimeMode`、固定 `runtimeId`、按项目登录与能力作用域、`runtime.status` 及旧数据兼容规则见 [服务器隔离工作区契约](ISOLATION-CONTRACT.md)。
 
 `HostEvent={seq,sessionId,runId?,ts,type,itemId?,payload}`。通知为 `{jsonrpc:'2.0',method:'event',params:HostEvent}`。`item.*` 的 payload 包含 `kind` 和 `text` 或 `delta`；工具为 `name/input/output`；审批 payload 为 `approvalId/kind/tool/input/questions`。提问结构采用 Claude AskUserQuestion 的 questions（question/header/options[{label,description}]/multiSelect）。`run.finished.payload.state` 为 completed/failed/interrupted。
 
@@ -38,6 +40,14 @@ seq 按 1024 号段预留，进程重启跳过未使用尾号，允许间隙但�
 - `RunHandle(run_id,task,native={})`：task 为整个运行任务，Host 负责将其退出转换为 run.finished；adapter 不重复发送 run.started/finished。
 - capabilities、start_run、append_input、stop、respond_approval、native_exists 均 async；start_run 返回 RunHandle；未支持能力抛 AdapterError。
 - `FakeAdapter` 由 Host 显式配置启用；`ClaudeAdapter`、`CodexAdapter` 动态检测。所有适配器未登录时先返回 E_NOT_LOGGED_IN，不发 prompt。
+
+## 原生进程环境
+
+Host 启动的能力检测、认证查询、退出登录、Codex app-server、登录 PTY 及官方 Agent 原生终端均排除 `SSH_CONNECTION`、`SSH_CLIENT`、`SSH_TTY`、`SSH_ORIGINAL_COMMAND`。Claude SDK 会合并父进程环境，因此在已有 CLI 进程组包装器内、执行官方二进制之前通过 `env -u` 排除这些字段；不修改 SDK 或官方 CLI。
+
+过滤只针对四个 SSH 连接元数据字段，不修改 Host 的全局环境，不改变服务器时区、语言、代理、认证变量、配置目录、SSH agent 或构建工具链。普通 Shell 终端保留服务器原有行为。此措施不限制同用户进程读取宿主文件、进程信息或登录记录，也不构成沙箱或账号访问保证。远端项目运行参数不注入桌面设备名、设备 ID 或本机执行指令；本机项目仍按 M3 契约显式提供执行位置与通道。
+
+SDK 环境合并依据：[固定版本 v0.2.174 的官方子进程实现](https://github.com/anthropics/claude-agent-sdk-python/blob/v0.2.174/src/claude_agent_sdk/_internal/transport/subprocess_cli.py)。
 
 ## Desktop IPC
 

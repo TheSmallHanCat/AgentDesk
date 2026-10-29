@@ -24,7 +24,11 @@ CREATE TABLE event_blobs(seq INTEGER PRIMARY KEY, session_id TEXT NOT NULL, cont
 CREATE TABLE approvals(id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(id), kind TEXT NOT NULL, payload_json TEXT NOT NULL, state TEXT NOT NULL, decision_json TEXT, decided_by_device TEXT, decided_at TEXT);
 CREATE TABLE devices(id TEXT PRIMARY KEY, name TEXT NOT NULL, os TEXT NOT NULL, last_seen_at TEXT NOT NULL, online INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE client_msgs(client_msg_id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id), run_id TEXT NOT NULL REFERENCES runs(id), accepted_at TEXT NOT NULL);
-""", "ALTER TABLE sessions ADD COLUMN archived_at TEXT;"]
+""", "ALTER TABLE sessions ADD COLUMN archived_at TEXT;", """
+ALTER TABLE projects ADD COLUMN runtime_mode TEXT NOT NULL DEFAULT 'direct';
+ALTER TABLE projects ADD COLUMN runtime_id TEXT;
+ALTER TABLE sessions ADD COLUMN runtime_id TEXT;
+"""]
 
 
 class Database:

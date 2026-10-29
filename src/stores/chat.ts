@@ -49,6 +49,8 @@ export const useChatStore = defineStore('chat', () => {
   const active = reactive<Record<string, string>>({})
   const states = reactive<Record<string, SessionState>>({})
   const agents = useLoginStore().agents
+  const capabilities = (project: Project) =>
+    useLoginStore().capabilities(project.connectionId, project.id)
   const errors = reactive<Record<string, string>>({})
   const loading = reactive<Record<string, boolean>>({})
   const archived = reactive<Record<string, boolean>>({})
@@ -173,7 +175,7 @@ export const useChatStore = defineStore('chat', () => {
         }),
       )
       if (revisions.get(key) !== revision) return
-      useLoginStore().setCapabilities(project.connectionId, environment.agents)
+      useLoginStore().setCapabilities(project.connectionId, environment.agents, project.id)
       const nextId = rows.some((value) => value.id === active[key]) ? active[key] : rows[0]?.id
       if (nextId) await select(project, nextId)
       else {
@@ -211,9 +213,12 @@ export const useChatStore = defineStore('chat', () => {
         const message = current.pending.find((value) => value.id === event.payload.clientMsgId)
         if (message) message.status = 'delivered'
       }
-      if (event.type === 'item.completed' && event.payload.delivery === 'undelivered') {
+      if (
+        event.type === 'item.completed' &&
+        ['undelivered', 'unknown'].includes(String(event.payload.delivery))
+      ) {
         const message = current.pending.find((value) => value.id === event.payload.clientMsgId)
-        if (message) message.status = 'undelivered'
+        if (message) message.status = event.payload.delivery as Delivery
       }
       if (event.type === 'session.updated') {
         const session = list(project).find((value) => value.id === sessionId)
@@ -536,6 +541,7 @@ export const useChatStore = defineStore('chat', () => {
     active,
     states,
     agents,
+    capabilities,
     errors,
     loading,
     list,

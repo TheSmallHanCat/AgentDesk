@@ -12,7 +12,7 @@ import uuid
 
 from ..adapters.base import AdapterError
 from ..adapters.login import LoginParser, safe_url
-from ..adapters.native_common import close_process
+from ..adapters.native_common import close_process, native_environment
 from ..adapters.native_rpc import NativeRpc
 
 
@@ -43,7 +43,7 @@ class PtyLogin:
             fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 240, 0, 0))
             os.set_blocking(master, False)
             # Browsers run on the desktop. No browser is launched on the Host.
-            environment = {**os.environ, "BROWSER": "/bin/true", "TERM": "xterm-256color"}
+            environment = {**native_environment(), "BROWSER": "/bin/true", "TERM": "xterm-256color"}
             self.process = await asyncio.create_subprocess_exec(
                 *self.arguments, stdin=slave, stdout=slave, stderr=slave,
                 env=environment, start_new_session=True,

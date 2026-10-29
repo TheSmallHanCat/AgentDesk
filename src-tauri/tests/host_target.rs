@@ -27,6 +27,7 @@ fn host_session_ownership_and_identity_are_persistent_and_connection_scoped() {
     db.save_connection(&connection).unwrap();
     db.save_connection(&other).unwrap();
     let project = Project {
+        runtime_mode: "direct".into(),
         device_local: false,
         id: "project".into(),
         connection_id: "one".into(),
@@ -41,6 +42,20 @@ fn host_session_ownership_and_identity_are_persistent_and_connection_scoped() {
         last_opened_at: None,
     };
     db.save_project(&project).unwrap();
+    let mut legacy = serde_json::to_value(&project).unwrap();
+    legacy.as_object_mut().unwrap().remove("runtimeMode");
+    assert_eq!(
+        serde_json::from_value::<Project>(legacy)
+            .unwrap()
+            .runtime_mode,
+        "direct"
+    );
+    let mut isolated = project.clone();
+    isolated.runtime_mode = "isolated".into();
+    assert_eq!(db.save_project(&isolated).unwrap_err().code, "E_TARGET");
+    isolated.id = "isolated".into();
+    db.save_project(&isolated).unwrap();
+    assert_eq!(db.project("isolated").unwrap().runtime_mode, "isolated");
     let target = Target {
         device_local: false,
         connection_id: "one".into(),

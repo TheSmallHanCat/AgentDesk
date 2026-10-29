@@ -1,6 +1,6 @@
 # 参与开发
 
-请先阅读 README、`docs/IMPLEMENTATION-CONTRACT.md` 与当前阶段进度报告。设计优先级为主设计第 1 节决策记录、Claude 主设计、GPT 需求和布局规范。
+请先阅读 README、`docs/design/远程开发工作台需求设计-Claude版.md`、`docs/IMPLEMENTATION-CONTRACT.md` 与当前阶段进度报告。设计优先级为主设计第 1 节决策记录、Claude 主设计、GPT 需求和布局规范。
 
 使用 pnpm 和仓库现有锁文件。代码标识符与注释使用英文，文档和 Conventional Commits 提交说明使用简体中文，例如 `fix: 修复迟到的目录响应覆盖当前项目`。
 

@@ -6,7 +6,6 @@ import json
 import ntpath
 import os
 import platform
-import shlex
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -14,8 +13,11 @@ from typing import Any, Awaitable, Callable
 
 from .. import __version__
 from ..adapters.base import AdapterError, AgentAdapter, RunContext, RunHandle
+from ..adapters.native_common import native_command
 from ..device.manager import DeviceManager, instructions, project_key, windows_path
 from ..store.database import Database, now
+from ..runtime.adapter import RuntimePool
+from ..runtime.engine import validate_project
 from .login import LoginManager
 
 MAX_FRAME = 4 * 1024 * 1024
@@ -55,7 +57,7 @@ class Client:
 
 
 class HostService:
-    def __init__(self, home: Path, adapters: dict[str, AgentAdapter] | None = None, *, device_options: dict | None = None):
+    def __init__(self, home: Path, adapters: dict[str, AgentAdapter] | None = None, *, device_options: dict | None = None, isolation_options: dict | None = None):
         self.home = Path(home)
         self.home.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.db = Database(self.home / "state" / "host.sqlite")
@@ -63,6 +65,7 @@ class HostService:
             os.chmod(self.home / "state", 0o700)
             os.chmod(self.home / "state" / "host.sqlite", 0o600)
         self.adapters = adapters or {}
+        self.runtimes = RuntimePool(self.home, self.db.host_id, isolation_options)
         self.clients: set[Client] = set()
         self.handles: dict[str, tuple[AgentAdapter, RunHandle]] = {}
         self.watchers: set[asyncio.Task] = set()
@@ -143,21 +146,33 @@ class HostService:
             return self.capability_cache[agent]
         return await asyncio.shield(self._probe_agent(agent))
 
-    async def capabilities(self) -> dict[str, Any]:
-        values = await asyncio.gather(*(self._agent_capability(agent) for agent in self.adapters))
+    def _adapter(self, agent, project=None):
+        if project and project.get('runtimeMode') == 'isolated':
+            return self.runtimes.adapter(project, agent)
+        return self.adapters.get(agent)
+
+    async def _scoped_capability(self, agent, project=None):
+        if project and project.get('runtimeMode') == 'isolated':
+            return await self.runtimes.adapter(project, agent).capabilities()
+        return await self._agent_capability(agent)
+
+    async def capabilities(self, project=None) -> dict[str, Any]:
+        values = await asyncio.gather(*(self._scoped_capability(agent, project) for agent in self.adapters))
         return dict(zip(self.adapters, values))
 
     def _session(self, session_id: str) -> dict[str, Any]:
-        row = self.db.one("SELECT s.*,p.path AS project_path,p.kind,p.device_id AS project_device_id,p.native_root AS project_native_root FROM sessions s JOIN projects p ON p.id=s.project_id WHERE s.id=? AND s.deleted_at IS NULL", (session_id,))
+        row = self.db.one("SELECT s.*,p.path AS project_path,p.kind,p.device_id AS project_device_id,p.native_root AS project_native_root,p.runtime_mode AS project_runtime_mode,p.runtime_id AS project_runtime_id FROM sessions s JOIN projects p ON p.id=s.project_id WHERE s.id=? AND s.deleted_at IS NULL", (session_id,))
         if not row:
             raise fail("E_NOT_FOUND", "session.lookup", "Session does not exist", "Refresh the session list")
-        return {"id": row["id"], "projectId": row["project_id"], "agent": row["agent"], "nativeId": row["native_id"], "title": row["title"], "model": row["model"], "permissionMode": row["permission_mode"], "status": row["status"], "createdAt": row["created_at"], "updatedAt": row["updated_at"], "path": row["project_native_root"] if row["kind"] == "local" else row["project_path"], "projectPath": row["project_path"], "kind": row["kind"], "deviceId": row["project_device_id"], "archived": row["archived_at"] is not None, "executionPolicy": getattr(self.adapters.get(row["agent"]), "local_execution_policy", None) if row["kind"] == "local" else None}
+        if row["runtime_id"] != row["project_runtime_id"]:
+            raise fail("E_TARGET", "session.lookup", "Session runtime ownership mismatch")
+        return {"runtimeMode": row["project_runtime_mode"], "runtimeId": row["runtime_id"], "id": row["id"], "projectId": row["project_id"], "agent": row["agent"], "nativeId": row["native_id"], "title": row["title"], "model": row["model"], "permissionMode": row["permission_mode"], "status": row["status"], "createdAt": row["created_at"], "updatedAt": row["updated_at"], "path": row["project_native_root"] if row["kind"] == "local" else row["project_path"], "projectPath": row["project_path"], "kind": row["kind"], "deviceId": row["project_device_id"], "archived": row["archived_at"] is not None, "executionPolicy": getattr(self.adapters.get(row["agent"]), "local_execution_policy", None) if row["kind"] == "local" else None}
 
     def _project(self, project_id: str) -> dict[str, Any]:
         row = self.db.one("SELECT * FROM projects WHERE id=?", (project_id,))
         if not row:
             raise fail("E_NOT_FOUND", "project.lookup", "Project does not exist", "Register the remote project")
-        return {"id": row["id"], "kind": row["kind"], "deviceId": row["device_id"], "nativeRoot": row["native_root"], "path": row["path"], "name": row["display_name"], "defaultAgent": row["default_agent"], "createdAt": row["created_at"], "archived": row["archived_at"] is not None}
+        return {"runtimeMode": row["runtime_mode"], "runtimeId": row["runtime_id"], "id": row["id"], "kind": row["kind"], "deviceId": row["device_id"], "nativeRoot": row["native_root"], "path": row["path"], "name": row["display_name"], "defaultAgent": row["default_agent"], "createdAt": row["created_at"], "archived": row["archived_at"] is not None}
 
     def _record(self, session_id: str, run_id: str | None, event_type: str, payload: dict[str, Any], item_id: str | None = None, *, seq: int | None = None, commit: bool = True) -> dict[str, Any]:
         seq = self.db.next_seq() if seq is None else seq
@@ -218,6 +233,7 @@ class HostService:
     async def disconnect(self, client: Client) -> None:
         self.clients.discard(client)
         await self.logins.disconnect(client)
+        await self.runtimes.disconnect(client)
         await self.devices.disconnect(client)
         client.subscriptions.clear()
         client.subscription_tokens.clear()
@@ -245,15 +261,14 @@ class HostService:
             self.clients.add(client)
             self.db.execute("INSERT INTO devices VALUES(?,?,?,?,1) ON CONFLICT(id) DO UPDATE SET name=excluded.name,os=excluded.os,last_seen_at=excluded.last_seen_at,online=1", (device_id, name, client_os, now()))
             self.db.commit()
-            for agent in self.adapters:
-                if self.capability_expiry.get(agent, 0) <= asyncio.get_running_loop().time():
-                    self._probe_agent(agent)
-            return {"protocolVersion": "1.0", "host": __version__, "hostId": self.db.host_id, "capabilities": self.cached_capabilities(), "currentSeq": self.db.current_seq}
+            return {"protocolVersion": "1.0", "host": __version__, "hostId": self.db.host_id, "capabilities": self.cached_capabilities(), "currentSeq": self.db.current_seq, "features": {"isolatedRuntime": 1}}
         if not client.device_id:
             raise fail("E_PROTOCOL_VERSION", "hello", "Handshake is required", "Call hello before business methods")
+        if method == 'runtime.status':
+            return await self.runtimes.engine.status()
         if method == "host.prepareShutdown":
             async with self.mutation_lock:
-                if self.handles or self.logins.sessions or self.db.one("SELECT id FROM runs WHERE finished_at IS NULL LIMIT 1"):
+                if self.handles or self.logins.sessions or self.runtimes.busy() or self.db.one("SELECT id FROM runs WHERE finished_at IS NULL LIMIT 1"):
                     raise fail("E_SESSION_BUSY", method, "Host has active runs", "Stop active runs before maintenance")
                 clock = asyncio.get_running_loop().time()
                 if self.draining_until > clock and self.draining_device != client.device_id:
@@ -268,22 +283,42 @@ class HostService:
                 self.draining_until = 0.0
                 self.draining_device = None
                 return {"cancelled": True}
+        project = self._project(required(params, "projectId")) if method in {"agent.status", "env.probe", "login.start", "agent.logout", "agent.terminal.start"} and params.get("projectId") else None
         if method == "agent.status":
-            return await self.capabilities()
+            return await self.capabilities(project)
         if method == "env.probe":
-            return {"layers": [{"name": "system", "status": "ready", "detail": f"{platform.system()} {platform.machine()}"}, {"name": "host", "status": "ready", "detail": __version__}], "agents": await self.capabilities(), "host": {"installed": True, "running": True, "version": __version__, "hostId": self.db.host_id, "activeRuns": len(self.handles)}}
-        if method == "login.respond":
-            return await self.logins.respond(client, required(params, "loginId"), required(params, "text"))
-        if method == "login.cancel":
-            return await self.logins.cancel(client, required(params, "loginId"))
+            return {"layers": [{"name": "system", "status": "ready", "detail": f"{platform.system()} {platform.machine()}"}, {"name": "host", "status": "ready", "detail": __version__}], "agents": await self.capabilities(project), "runtime": {"mode": project["runtimeMode"], "id": project["runtimeId"]} if project else {"mode": "direct"}, "isolation": await self.runtimes.engine.status(), "host": {"installed": True, "running": True, "version": __version__, "hostId": self.db.host_id, "activeRuns": len(self.handles)}}
+        if method in {"login.respond", "login.cancel"}:
+            login_id = required(params, "loginId")
+            runtime = self.runtimes.login(login_id, client)
+            if runtime:
+                return await runtime.request(method, {"loginId": login_id, **({"text": required(params, "text")} if method == "login.respond" else {})})
+            if method == "login.respond":
+                return await self.logins.respond(client, login_id, required(params, "text"))
+            return await self.logins.cancel(client, login_id)
         if method in {"login.start", "agent.terminal.start", "agent.logout"}:
             agent = required(params, "agent")
-            adapter = self.adapters.get(agent)
+            adapter = self._adapter(agent, project)
             if not adapter:
                 raise fail("E_AGENT_NOT_INSTALLED", method, "Agent is not configured", "Install the Agent from Environment")
-            caps = await self._agent_capability(agent)
+            caps = await self._scoped_capability(agent, project)
             if not caps.get("installed", False):
                 raise fail("E_AGENT_NOT_INSTALLED", method, "Agent is not installed", "Install the Agent from Environment")
+            if project and project["runtimeMode"] == "isolated":
+                runtime = self.runtimes.client(project)
+                if method == "agent.terminal.start":
+                    raise fail("E_RUNTIME_TERMINAL", method, "Independent terminals are unavailable in isolated workspaces")
+                async with self.mutation_lock:
+                    if self.draining_until > asyncio.get_running_loop().time():
+                        raise fail("E_HOST_DRAINING", method, "Host is preparing maintenance")
+                    if self.db.one("SELECT r.id FROM runs r JOIN sessions s ON s.id=r.session_id WHERE s.runtime_id=? AND r.finished_at IS NULL LIMIT 1", (project["runtimeId"],)):
+                        raise fail("E_SESSION_BUSY", method, "Workspace has active runs")
+                    if method == "login.start":
+                        return await runtime.login_start(client, agent)
+                    capability = await runtime.request("logout", {"agent": agent})
+                    if capability.get("authStatus") != "loggedOut":
+                        raise fail("E_LOGOUT_VERIFY", method, "Logout status was not confirmed")
+                    return {"loggedOut": True, "capability": capability}
             if method == "agent.terminal.start":
                 terminal_command = getattr(adapter, "terminal_command", None)
                 if terminal_command is None:
@@ -291,7 +326,7 @@ class HostService:
                 args = await terminal_command()
                 if not isinstance(args, list) or not args or any(not isinstance(arg, str) or not arg for arg in args):
                     raise fail("E_CAPABILITY", method, "Agent terminal command is unavailable")
-                return {"command": shlex.join(args)}
+                return {"command": native_command(args)}
             if method == "login.start":
                 async with self.mutation_lock:
                     if self.draining_until > asyncio.get_running_loop().time():
@@ -303,7 +338,7 @@ class HostService:
             async with self.mutation_lock:
                 if agent in self.logins.agents:
                     raise fail("E_LOGIN_BUSY", method, "Agent has an active login", "Cancel the login before signing out")
-                if self.db.one("SELECT r.id FROM runs r JOIN sessions s ON s.id=r.session_id WHERE s.agent=? AND r.finished_at IS NULL LIMIT 1", (agent,)):
+                if self.db.one("SELECT r.id FROM runs r JOIN sessions s ON s.id=r.session_id WHERE s.agent=? AND s.runtime_id IS NULL AND r.finished_at IS NULL LIMIT 1", (agent,)):
                     raise fail("E_SESSION_BUSY", method, "Agent has active runs", "Finish or stop all runs for this Agent before logging out")
                 await logout()
                 capability = await self._refresh_agent_capability(agent)
@@ -347,7 +382,7 @@ class HostService:
                 await self.emit(session["id"], None, "session.updated", {"title": title})
                 return self._session(session["id"])
             # Native existence checks can start a CLI; keep them outside the lock.
-            adapter = self.adapters.get(session["agent"])
+            adapter = self._adapter(session["agent"], self._project(session["projectId"]))
             missing = bool(session.get("nativeId") and adapter and not await adapter.native_exists(session))
             async with self.mutation_lock:
                 return await self._delete_session(self._session(session["id"]), native_missing=missing)
@@ -363,10 +398,10 @@ class HostService:
         if method == "run.send":
             session = self._session(required(params, "sessionId"))
             existing = self.db.one("SELECT * FROM client_msgs WHERE client_msg_id=?", (required(params, "clientMsgId"),))
-            caps = {} if existing else await self._agent_capability(session["agent"])
+            caps = {} if existing else await self._scoped_capability(session["agent"], self._project(session["projectId"]))
             native_exists = True
             if not existing and session.get("nativeId") and caps.get("available") and caps.get("loggedIn"):
-                native_exists = await self.adapters[session["agent"]].native_exists(session)
+                native_exists = await self._adapter(session["agent"], self._project(session["projectId"])).native_exists(session)
             async with self.mutation_lock:
                 return await self._send(client, params, caps, native_exists)
         if method in {"run.append", "run.stop"}:
@@ -458,6 +493,9 @@ class HostService:
         project_id = required(params, "id")
         kind = params.get("kind", "remote")
         raw_path = required(params, "path")
+        runtime_mode = params.get("runtimeMode", "direct")
+        if runtime_mode not in ("direct", "isolated") or runtime_mode == "isolated" and kind != "remote":
+            raise fail("E_RUNTIME_MODE", "project.upsert", "Isolated execution requires a remote project")
         device_id = None
         native_root = None
         if kind == "local":
@@ -483,16 +521,19 @@ class HostService:
             path_text = str(path.resolve())
         else:
             raise fail("E_INVALID_PARAMS", "project.upsert", "Unknown project kind")
+        if runtime_mode == "isolated":
+            path_text = str(validate_project(path_text, self.home))
         name = required(params, "name")
         if len(name) > 256:
             raise fail("E_INVALID_PARAMS", "project.upsert", "Project name is too long")
-        existing = self.db.one("SELECT path,kind,device_id FROM projects WHERE id=?", (project_id,))
+        existing = self.db.one("SELECT path,kind,device_id,runtime_mode,runtime_id FROM projects WHERE id=?", (project_id,))
         same_path = existing and existing["path"] == path_text
         if existing and kind == "local" and existing["kind"] == "local":
             same_path = project_key(device_id, existing["path"], device["os"]) == project_key(device_id, path_text, device["os"])
-        if existing and (not same_path or (existing["kind"], existing["device_id"]) != (kind, device_id)):
+        if existing and (not same_path or (existing["kind"], existing["device_id"], existing["runtime_mode"]) != (kind, device_id, runtime_mode)):
             raise fail("E_CONFLICT", "project.upsert", "Project path is immutable", "Register a separate project")
-        self.db.execute("INSERT INTO projects(id,kind,device_id,path,native_root,display_name,default_agent,created_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET display_name=excluded.display_name,default_agent=excluded.default_agent", (project_id, kind, device_id, path_text, native_root, name, params.get("defaultAgent"), now()))
+        runtime_id = existing["runtime_id"] if existing else "rt_" + uuid.uuid4().hex if runtime_mode == "isolated" else None
+        self.db.execute("INSERT INTO projects(id,kind,device_id,path,native_root,display_name,default_agent,created_at,runtime_mode,runtime_id) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET display_name=excluded.display_name,default_agent=excluded.default_agent", (project_id, kind, device_id, path_text, native_root, name, params.get("defaultAgent"), now(), runtime_mode, runtime_id))
         self.db.commit()
         return self._project(project_id)
 
@@ -504,10 +545,10 @@ class HostService:
         if project["kind"] == "local" and mode == "plan":
             raise fail("E_LOCAL_PLAN_UNSUPPORTED", "session.create", "Plan mode is unavailable for local projects", "The SSH execution channel cannot enforce read-only access on the device; use a remote project for plan mode")
         agent = required(params, "agent")
-        adapter = self.adapters.get(agent)
+        adapter = self._adapter(agent, project)
         if not adapter:
             raise fail("E_AGENT_NOT_INSTALLED", "session.create", "Agent is not configured", "Install or enable the Agent")
-        capabilities = await self._agent_capability(agent)
+        capabilities = await self._scoped_capability(agent, project)
         if not capabilities.get("installed", capabilities.get("available")):
             raise fail("E_AGENT_NOT_INSTALLED", "session.create", "Agent is not installed", "Install the Agent from Environment")
         if not capabilities.get("loggedIn", False):
@@ -525,7 +566,7 @@ class HostService:
             raise fail("E_INVALID_PARAMS", "session.create", "Invalid title")
         session_id = f"ses_{uuid.uuid4().hex}"
         timestamp = now()
-        self.db.execute("INSERT INTO sessions(id,project_id,agent,title,model,permission_mode,status,created_at,updated_at) VALUES(?,?,?,?,?,?,'idle',?,?)", (session_id, project["id"], agent, title, model, mode, timestamp, timestamp))
+        self.db.execute("INSERT INTO sessions(id,project_id,agent,title,model,permission_mode,status,created_at,updated_at,runtime_id) VALUES(?,?,?,?,?,?,'idle',?,?,?)", (session_id, project["id"], agent, title, model, mode, timestamp, timestamp, project["runtimeId"]))
         self.db.commit()
         return self._session(session_id)
 
@@ -536,7 +577,7 @@ class HostService:
             self.db.execute("UPDATE sessions SET archived_at=?,updated_at=? WHERE id=?", (now(), now(), session["id"]))
             self.db.commit()
             return {"archived": True}
-        adapter = self.adapters.get(session["agent"])
+        adapter = self._adapter(session["agent"], self._project(session["projectId"]))
         if session["agent"] == "fake" and session.get("nativeId"):
             await adapter.delete_session(session)
         session_id = session["id"]
@@ -571,7 +612,7 @@ class HostService:
             raise fail("E_HOST_DRAINING", "run.send", "Host is preparing maintenance", "Retry after maintenance completes")
         if self.db.one("SELECT id FROM runs WHERE session_id=? AND finished_at IS NULL", (session_id,)):
             raise fail("E_SESSION_BUSY", "run.send", "Session has an active run", "Append input or stop the current run")
-        adapter = self.adapters.get(session["agent"])
+        adapter = self._adapter(session["agent"], self._project(session["projectId"]))
         if not adapter:
             raise fail("E_AGENT_NOT_INSTALLED", "run.send", "Agent is not installed")
         if not capabilities.get("loggedIn", False):
@@ -708,7 +749,7 @@ class HostService:
         if active:
             for message in active[1].native.get("pendingInputs", {}).values():
                 if message.get("accepted") and not message["delivered"]:
-                    await self.emit(session_id, run_id, "item.completed", {"kind": "user_input", "delivery": "undelivered", "clientMsgId": message["clientMsgId"], "text": message["text"]}, "input_" + message["clientMsgId"])
+                    await self.emit(session_id, run_id, "item.completed", {"kind": "user_input", "delivery": "unknown" if message.get("deliveryUnknown") else "undelivered", "clientMsgId": message["clientMsgId"], "text": message["text"]}, "input_" + message["clientMsgId"])
         reason = self.db.one("SELECT stop_reason FROM runs WHERE id=?", (run_id,))["stop_reason"]
         await self.emit(session_id, run_id, "run.finished", {"state": state, **({"reason": reason} if reason else {})})
 
@@ -903,6 +944,11 @@ class HostService:
 
     async def close(self) -> None:
         await self.logins.close()
+        runtime_error = None
+        try:
+            await self.runtimes.close()
+        except Exception as error:
+            runtime_error = error
         await self.devices.close()
         for task in self.capability_tasks.values():
             if not task.done():
@@ -917,3 +963,5 @@ class HostService:
         if self.watchers:
             await asyncio.gather(*tuple(self.watchers), return_exceptions=True)
         self.db.close()
+        if runtime_error:
+            raise fail('E_RUNTIME_UNAVAILABLE', 'runtime.close', 'Workspace cleanup was not confirmed') from None

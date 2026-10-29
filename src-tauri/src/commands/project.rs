@@ -14,6 +14,15 @@ pub async fn project_save(
     mut project: Project,
     create_dir: bool,
 ) -> AppResult<Project> {
+    if !["direct", "isolated"].contains(&project.runtime_mode.as_str())
+        || (project.device_local && project.runtime_mode != "direct")
+    {
+        return Err(AppError::new(
+            "E_RUNTIME_MODE",
+            "project",
+            "Invalid project runtime",
+        ));
+    }
     if project.id.is_empty() {
         project.id = uuid::Uuid::new_v4().to_string();
     }
@@ -22,6 +31,7 @@ pub async fn project_save(
         if old.path != project.path
             || old.connection_id != project.connection_id
             || old.device_local != project.device_local
+            || old.runtime_mode != project.runtime_mode
         {
             return Err(AppError::new(
                 "E_TARGET",

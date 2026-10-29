@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useDeviceStore } from '../stores/device'
 import { useChatStore } from '../stores/chat'
@@ -8,18 +8,20 @@ import AgentLoginStatus from './AgentLoginStatus.vue'
 import { errorText } from '../utils/api'
 import type { Project } from '../types'
 const props = defineProps<{ project?: Project }>()
-const emit = defineEmits<{ close: [] }>()
+const emit = defineEmits<{ close: []; created: [project: Project, sessionId: string] }>()
 const { t } = useI18n(),
   chat = useChatStore()
 const device = useDeviceStore()
+let alive = true
+onUnmounted(() => {
+  alive = false
+})
 const agent = ref(''),
   model = ref(''),
   mode = ref('default'),
   busy = ref(false),
   error = ref('')
-const capabilities = computed(() =>
-  props.project ? (chat.agents[props.project.connectionId] ?? {}) : {},
-)
+const capabilities = computed(() => (props.project ? chat.capabilities(props.project) : {}))
 const selected = computed(() => capabilities.value[agent.value])
 const options = computed(() =>
   Object.entries(capabilities.value).map(([id, caps]) => ({
@@ -46,35 +48,54 @@ const modes = computed(() =>
   })),
 )
 watch(
-  () => props.project,
-  (project) => {
-    agent.value =
-      Object.entries(project ? (chat.agents[project.connectionId] ?? {}) : {}).find(
-        ([, caps]) => caps.available && caps.loggedIn,
-      )?.[0] ??
-      Object.keys(project ? (chat.agents[project.connectionId] ?? {}) : {})[0] ??
-      ''
-    error.value = ''
+  [() => props.project, capabilities],
+  ([project, values], [previous]) => {
+    if (project !== previous || !values[agent.value]?.installed) {
+      const preferred = project?.defaultAgent ?? ''
+      agent.value =
+        (values[preferred]?.available && values[preferred]?.loggedIn ? preferred : undefined) ??
+        Object.keys(values).find((id) => values[id].available && values[id].loggedIn) ??
+        (values[preferred]?.installed ? preferred : undefined) ??
+        Object.keys(values).find((id) => values[id].installed) ??
+        ''
+    }
+    if (project !== previous) error.value = ''
   },
   { immediate: true },
 )
 watch(
-  selected,
-  () => {
-    model.value = models.value[0]?.value ?? ''
-    mode.value = modes.value.find((value) => !value.disabled)?.value ?? 'default'
+  [() => props.project, agent, selected],
+  ([project, agentId], [previousProject, previousAgent]) => {
+    const changed = project !== previousProject || agentId !== previousAgent
+    if (changed || !models.value.some((value) => value.value === model.value)) {
+      const preferred = agentId === project?.defaultAgent ? project.defaultModel : ''
+      model.value =
+        models.value.find((value) => value.value === preferred)?.value ??
+        models.value[0]?.value ??
+        ''
+    }
+    const allowed = modes.value.filter((value) => !value.disabled)
+    if (changed || !allowed.some((value) => value.value === mode.value))
+      mode.value =
+        allowed.find((value) => value.value === project?.permissionMode)?.value ??
+        allowed.find((value) => value.value === 'default')?.value ??
+        allowed[0]?.value ??
+        ''
   },
   { immediate: true },
 )
 async function create() {
-  if (!props.project) return
+  if (!props.project || busy.value) return
   busy.value = true
   error.value = ''
+  const project = props.project
   try {
-    await chat.create(props.project, agent.value, model.value, mode.value)
+    const session = await chat.create(project, agent.value, model.value, mode.value)
+    if (!alive || props.project !== project) return
+    emit('created', project, session.id)
     emit('close')
   } catch (value) {
-    error.value = errorText(value)
+    if (alive && props.project === project) error.value = errorText(value)
   } finally {
     busy.value = false
   }
@@ -84,8 +105,13 @@ async function create() {
   <n-modal
     :show="!!project"
     :mask-closable="!busy"
+    :close-on-esc="!busy"
     @update:show="(value) => !value && emit('close')"
-    ><n-card class="session-dialog" :title="t('chat.newSession')" closable @close="emit('close')"
+    ><n-card
+      class="session-dialog"
+      :title="t('chat.newSession')"
+      :closable="!busy"
+      @close="emit('close')"
       ><n-form label-placement="top"
         ><n-form-item :label="t('chat.agent')"
           ><n-select v-model:value="agent" :options="options" :placeholder="t('chat.chooseAgent')"
@@ -95,9 +121,15 @@ async function create() {
           class="muted"
         >
           {{ t('chat.noReadyAgent') }}
-          <router-link to="/environment" @click="emit('close')">{{
-            t('environment.title')
-          }}</router-link>
+          <router-link
+            :to="{
+              name: 'environment',
+              params: { connectionId: project?.connectionId },
+              query: { projectId: project?.id },
+            }"
+            @click="emit('close')"
+            >{{ t('environment.title') }}</router-link
+          >
         </p>
         <AgentLoginStatus
           v-if="project && agent"
@@ -125,10 +157,12 @@ async function create() {
           :disabled="
             !agent ||
             !model ||
+            !mode ||
             !selected?.available ||
             !selected?.loggedIn ||
             (!!project?.deviceLocal && mode === 'plan') ||
-            (!!project?.deviceLocal && !device.state(project).enabled)
+            (!!project?.deviceLocal &&
+              (!device.state(project).enabled || device.state(project).state !== 'ready'))
           "
           @click="create"
           >{{ t('chat.create') }}</n-button

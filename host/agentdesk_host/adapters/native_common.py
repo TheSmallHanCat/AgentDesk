@@ -14,6 +14,18 @@ import tempfile
 
 
 MAX_FRAME = 4 * 1024 * 1024
+SSH_CONNECTION_VARIABLES = ('SSH_CONNECTION', 'SSH_CLIENT', 'SSH_TTY', 'SSH_ORIGINAL_COMMAND')
+
+
+def native_environment() -> dict[str, str]:
+    """Exclude transport metadata while retaining server auth and toolchain settings."""
+    return {key: value for key, value in os.environ.items() if key not in SSH_CONNECTION_VARIABLES}
+
+
+def native_command(arguments: list[str]) -> str:
+    """Filter at exec time, including when an SDK merges the parent environment."""
+    unset = [part for key in SSH_CONNECTION_VARIABLES for part in ('-u', key)]
+    return shlex.join(['env', *unset, '--', *arguments])
 
 
 def cached_capabilities(probe):
@@ -48,7 +60,7 @@ class ClaudeProcessGroup:
         root = Path(self.directory.name)
         self.pid_path = root / "group.pid"
         wrapper = root / "claude"
-        wrapper.write_text("#!/bin/sh\nprintf '%s\\n' \"$$\" > " + shlex.quote(str(self.pid_path)) + "\nexec " + shlex.join([setsid, "--", self.executable]) + ' "$@"\n', encoding="utf-8")
+        wrapper.write_text("#!/bin/sh\nprintf '%s\\n' \"$$\" > " + shlex.quote(str(self.pid_path)) + "\nexec " + native_command([setsid, "--", self.executable]) + ' "$@"\n', encoding="utf-8")
         wrapper.chmod(0o700)
         return str(wrapper)
 
@@ -106,6 +118,7 @@ async def command(arguments: list[str], timeout: float = 20) -> tuple[int, bytes
     process = await asyncio.create_subprocess_exec(
         *arguments, stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+        env=native_environment(),
         start_new_session=os.name == "posix", limit=MAX_FRAME,
     )
     assert process.stdout is not None

@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createPinia, setActivePinia } from 'pinia'
 import { Window } from 'happy-dom'
-import type { Target } from '../src/types.ts'
+import type { Project, Target } from '../src/types.ts'
 Object.defineProperty(globalThis, 'window', { value: new Window(), writable: true })
 Object.assign(globalThis, { isTauri: true })
 Object.assign(window, {
@@ -14,6 +14,7 @@ Object.assign(window, {
   },
 })
 const { useLoginStore, agentAuthStatus } = await import('../src/stores/login.ts')
+const { useDataStore } = await import('../src/stores/data.ts')
 const owner: Target = { connectionId: 'a', projectId: 'p', sessionId: 's', requestSeq: 55 }
 const signedOut = {
   installed: true,
@@ -28,6 +29,51 @@ function setup() {
   store.setCapabilities('a', { claude: { ...signedOut }, codex: { ...signedOut } })
   return store
 }
+function isolatedProject(id: string): Project {
+  return {
+    id,
+    connectionId: 'a',
+    runtimeMode: 'isolated',
+    name: id,
+    path: '/workspace/' + id,
+    description: '',
+    defaultAgent: 'claude',
+    defaultModel: '',
+    permissionMode: 'default',
+    pinned: false,
+    archived: false,
+  }
+}
+test('isolated login capabilities never fall back to another runtime on the same server', () => {
+  const store = setup()
+  useDataStore().projects = [isolatedProject('one'), isolatedProject('two')]
+  store.setCapabilities('a', { claude: { ...signedOut, loggedIn: true, authStatus: 'loggedIn' } })
+  assert.equal(store.capability('a', 'claude', 'one'), undefined)
+  store.setCapabilities('a', { claude: signedOut }, 'one')
+  assert.equal(store.capability('a', 'claude', 'one')?.loggedIn, false)
+  assert.equal(store.capability('a', 'claude', 'two'), undefined)
+  assert.equal(store.capability('a', 'claude')?.loggedIn, true)
+  store.$dispose()
+})
+test('disconnection invalidates pending capability requests for every isolated workspace', async () => {
+  const store = setup()
+  useDataStore().projects = [isolatedProject('one')]
+  let complete: () => void = () => {}
+  window.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+    assert.equal(command, 'agent_status')
+    assert.equal(args.target.projectId, 'one')
+    return new Promise((resolve) => {
+      complete = () => resolve({ target: args.target, data: { claude: signedOut } })
+    })
+  }
+  const pending = store.refresh('a', 'one')
+  store.disconnected('a')
+  complete()
+  await pending
+  assert.deepEqual(store.capabilities('a', 'one'), {})
+  assert.deepEqual(store.capabilities('a'), {})
+  store.$dispose()
+})
 test('login checks the full target, agent and login identity and clears terminal secrets', async () => {
   const store = setup()
   let channel: any

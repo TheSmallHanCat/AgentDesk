@@ -92,17 +92,19 @@ def test_real_session_archive_restore_preserves_native_and_events(tmp_path):
 
 def test_capability_probe_is_coalesced_and_hello_does_not_wait(tmp_path):
     class Slow(FakeAdapter):
-        def __init__(self): self.calls = 0; self.release = asyncio.Event()
+        def __init__(self): self.calls = 0; self.release = asyncio.Event(); self.started = asyncio.Event()
         async def capabilities(self):
             self.calls += 1
+            self.started.set()
             await self.release.wait()
             return await super().capabilities()
     async def check():
         adapter = Slow()
         service = HostService(tmp_path, {'fake': adapter})
         await asyncio.wait_for(connected(service), .2)
+        assert adapter.calls == 0
         tasks = [asyncio.create_task(service.capabilities()) for _ in range(4)]
-        await asyncio.sleep(0)
+        await asyncio.wait_for(adapter.started.wait(), 1)
         assert adapter.calls == 1
         adapter.release.set()
         await asyncio.gather(*tasks)

@@ -17,8 +17,19 @@ const shown = computed(() => route.name === 'workbench' && store.dockOpen)
 const active = computed(() => store.panes[store.activePane])
 const data = useDataStore()
 function connectionLabel(tab: WorkTab) {
+  if (tab.target.deviceLocal && (tab.type === 'editor' || tab.kind === 'shell'))
+    return t('projects.localDevice')
   const c = data.connections.find((c) => c.id === tab.target.connectionId)
-  return c ? `${c.name} · ${c.user}@${c.host}:${c.port}` : tab.target.connectionId
+  return (
+    t('projects.server') +
+    ' · ' +
+    (c ? `${c.name} · ${c.user}@${c.host}:${c.port}` : tab.target.connectionId)
+  )
+}
+function pathLabel(tab: WorkTab) {
+  return tab.target.deviceLocal && tab.type === 'terminal' && tab.kind !== 'shell'
+    ? t('workbench.associatedLocalProject', { path: tab.path })
+    : tab.path
 }
 function hideDock() {
   store.dockOpen = false
@@ -29,7 +40,12 @@ function split() {
   if (store.tabs.length <= store.panes.length) {
     const current = store.tabs.find((t) => t.id === active.value)
     const project = data.projects.find((p) => p.id === current?.target.projectId)
-    if (!project || (!project.deviceLocal && !data.online(project.connectionId))) return
+    if (
+      !project ||
+      project.runtimeMode === 'isolated' ||
+      (!project.deviceLocal && !data.online(project.connectionId))
+    )
+      return
     const original = active.value
     store.openTerminal(
       project,
@@ -81,7 +97,7 @@ function drag(event: PointerEvent, axis: 'x' | 'y' | 'height') {
   const container = (event.currentTarget as HTMLElement).parentElement!
   const box = container.getBoundingClientRect()
   const startY = event.clientY
-  const startHeight = store.dockHeight
+  const startHeight = box.height
   const move = (e: PointerEvent) => {
     if (axis === 'height')
       store.dockHeight = Math.max(
@@ -185,7 +201,7 @@ onUnmounted(() => stopDrag?.())
         @focusin="store.activePane = store.panes.indexOf(tab.id)"
         @pointerdown="store.activePane = store.panes.indexOf(tab.id)"
       >
-        <div class="pane-target mono">{{ connectionLabel(tab) }} : {{ tab.path }}</div>
+        <div class="pane-target mono">{{ connectionLabel(tab) }} : {{ pathLabel(tab) }}</div>
         <TerminalView
           v-if="tab.type === 'terminal'"
           :tab="tab"
@@ -218,7 +234,7 @@ onUnmounted(() => stopDrag?.())
 </template>
 <style scoped>
 .workspace-dock {
-  flex: none;
+  flex: 0 1 auto;
   display: flex;
   flex-direction: column;
   min-height: 180px;

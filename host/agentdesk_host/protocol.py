@@ -58,6 +58,7 @@ class HelloResult:
     hostId: str
     capabilities: dict[str, AgentCapability]
     currentSeq: int
+    features: RuntimeFeatures | None = None
 
 
 @dataclass(kw_only=True)
@@ -73,6 +74,11 @@ class HelloResponse:
     jsonrpc: Literal['2.0']
     id: int
     result: HelloResult
+
+
+@dataclass(kw_only=True)
+class RuntimeFeatures:
+    isolatedRuntime: int | None = None
 
 JsonValue = Any
 
@@ -112,6 +118,8 @@ class Session:
     deviceId: str | None | None = None
     projectPath: str | None = None
     executionPolicy: JsonValue | None = None
+    runtimeMode: RuntimeMode | None = None
+    runtimeId: str | None | None = None
 
 
 @dataclass(kw_only=True)
@@ -125,6 +133,8 @@ class HostProject:
     archived: bool | None = None
     nativeRoot: str | None | None = None
     deviceId: str | None | None = None
+    runtimeMode: RuntimeMode | None = None
+    runtimeId: str | None | None = None
 
 
 @dataclass(kw_only=True)
@@ -223,12 +233,12 @@ class AgentQuestion:
 
 @dataclass(kw_only=True)
 class EnvProbeParams:
-    pass
+    projectId: str | None = None
 
 
 @dataclass(kw_only=True)
 class AgentStatusParams:
-    pass
+    projectId: str | None = None
 
 
 @dataclass(kw_only=True)
@@ -244,6 +254,7 @@ class ProjectUpsertParams:
     defaultAgent: str | None = None
     kind: Literal['remote', 'local'] | None = None
     deviceId: str | None = None
+    runtimeMode: RuntimeMode | None = None
 
 
 @dataclass(kw_only=True)
@@ -382,8 +393,9 @@ RunCompactParams = dict[str, JsonValue]
 @dataclass(kw_only=True)
 class AgentLogoutParams:
     agent: str
+    projectId: str | None = None
 
-ProtocolErrorCode = Literal['E_PROTOCOL_VERSION', 'E_NOT_LOGGED_IN', 'E_AGENT_NOT_INSTALLED', 'E_SESSION_BUSY', 'E_NATIVE_MISSING', 'E_DEVICE_OFFLINE', 'E_TUNNEL_NOT_READY', 'E_CAPABILITY', 'E_ALREADY_RESOLVED', 'E_INVALID_PARAMS', 'E_NOT_FOUND', 'E_CONFLICT', 'E_FRAME_TOO_LARGE', 'E_INTERNAL', 'E_METHOD_NOT_FOUND', 'E_AGENT', 'E_HOST_DRAINING', 'E_AGENT_EXITED', 'E_TIMEOUT', 'E_CLI_VERSION', 'E_SANDBOX', 'E_AGENT_PROBE', 'E_AGENT_EXECUTABLE', 'E_LOGIN_BUSY', 'E_LOGIN_GONE', 'E_LOGIN_STATE', 'E_LOGIN_INPUT', 'E_LOGIN_PROTOCOL', 'E_LOGIN_FAILED', 'E_LOGIN_VERIFY', 'E_LOGIN_EXPIRED', 'E_LOGIN_CANCELLED', 'E_NATIVE_UNSUPPORTED', 'E_TARGET', 'E_LOGOUT_VERIFY']
+ProtocolErrorCode = Literal['E_PROTOCOL_VERSION', 'E_NOT_LOGGED_IN', 'E_AGENT_NOT_INSTALLED', 'E_SESSION_BUSY', 'E_NATIVE_MISSING', 'E_DEVICE_OFFLINE', 'E_TUNNEL_NOT_READY', 'E_CAPABILITY', 'E_ALREADY_RESOLVED', 'E_INVALID_PARAMS', 'E_NOT_FOUND', 'E_CONFLICT', 'E_FRAME_TOO_LARGE', 'E_INTERNAL', 'E_METHOD_NOT_FOUND', 'E_AGENT', 'E_HOST_DRAINING', 'E_AGENT_EXITED', 'E_TIMEOUT', 'E_CLI_VERSION', 'E_SANDBOX', 'E_AGENT_PROBE', 'E_AGENT_EXECUTABLE', 'E_LOGIN_BUSY', 'E_LOGIN_GONE', 'E_LOGIN_STATE', 'E_LOGIN_INPUT', 'E_LOGIN_PROTOCOL', 'E_LOGIN_FAILED', 'E_LOGIN_VERIFY', 'E_LOGIN_EXPIRED', 'E_LOGIN_CANCELLED', 'E_NATIVE_UNSUPPORTED', 'E_TARGET', 'E_LOGOUT_VERIFY', 'E_RUNTIME_PLATFORM', 'E_RUNTIME_MISSING', 'E_RUNTIME_IMAGE', 'E_RUNTIME_ROOTLESS', 'E_RUNTIME_LIMITS', 'E_RUNTIME_UNAVAILABLE', 'E_RUNTIME_PROTOCOL', 'E_RUNTIME_PATH', 'E_RUNTIME_MODE', 'E_RUNTIME_POLICY', 'E_RUNTIME_PROBE', 'E_RUNTIME_AGENT', 'E_RUNTIME_TERMINAL', 'E_RUNTIME_EXITED', 'E_RUNTIME_TIMEOUT', 'E_RUNTIME_WORKER', 'E_RUNTIME_CONTROL', 'E_RUNTIME_BUSY', 'E_RUNTIME_LIMIT']
 
 
 @dataclass(kw_only=True)
@@ -445,6 +457,7 @@ class DeviceOfflineParams:
 @dataclass(kw_only=True)
 class AgentTerminalStartParams:
     agent: str
+    projectId: str | None = None
 
 
 @dataclass(kw_only=True)
@@ -463,6 +476,7 @@ class DeviceTunnelReadyResult:
 @dataclass(kw_only=True)
 class LoginStartParams:
     agent: str
+    projectId: str | None = None
 
 
 @dataclass(kw_only=True)
@@ -528,3 +542,29 @@ class DeviceProjectParams:
 @dataclass(kw_only=True)
 class DeviceProjectResult:
     enabled: bool
+
+RuntimeMode = Literal['direct', 'isolated']
+
+
+@dataclass(kw_only=True)
+class RuntimeStatus:
+    supported: bool
+    state: str
+    reason: str | None = None
+    agents: list[str]
+
+
+@dataclass(kw_only=True)
+class WorkerSession:
+    id: str
+    agent: str
+    model: str
+    permissionMode: str
+    nativeId: str | None | None = None
+
+
+@dataclass(kw_only=True)
+class WorkerRequest:
+    id: int
+    method: Literal['probe', 'capabilities', 'native.exists', 'run.start', 'run.append', 'run.stop', 'login.start', 'login.respond', 'login.cancel', 'logout']
+    params: JsonValue

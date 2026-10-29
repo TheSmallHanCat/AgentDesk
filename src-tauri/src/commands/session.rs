@@ -30,7 +30,32 @@ pub async fn project_client(state: &AppState, target: &Target) -> AppResult<Arc<
         .ok_or_else(|| AppError::new("E_TARGET", "session", "A project target is required"))?;
     let project = state.db.project(project_id)?;
     let client = state.hosts.client(&state.ssh, &state.db, target).await?;
-    client.request("project.upsert", json!({"id":project.id,"path":project.path,"name":project.name,"defaultAgent":project.default_agent,"kind":if project.device_local {"local"} else {"remote"}})).await?;
+    if project.runtime_mode == "isolated"
+        && client
+            .hello
+            .lock()
+            .map_err(|e| AppError::io("runtime.hello", e))?["features"]["isolatedRuntime"]
+            != 1
+    {
+        return Err(AppError::new(
+            "E_RUNTIME_UNAVAILABLE",
+            "runtime.hello",
+            "Host does not support isolated workspaces",
+        ));
+    }
+    let registered = client.request("project.upsert", json!({"id":project.id,"path":project.path,"name":project.name,"defaultAgent":project.default_agent,"runtimeMode":project.runtime_mode,"kind":if project.device_local {"local"} else {"remote"}})).await?;
+    if project.runtime_mode == "isolated"
+        && (registered["runtimeMode"] != "isolated"
+            || registered["runtimeId"]
+                .as_str()
+                .is_none_or(|id| !id.starts_with("rt_") || id.len() != 35))
+    {
+        return Err(AppError::new(
+            "E_TARGET",
+            "runtime.project",
+            "Host did not preserve the project runtime",
+        ));
+    }
     Ok(client)
 }
 fn session_id(target: &Target) -> AppResult<&str> {

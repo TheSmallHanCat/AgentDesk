@@ -1,0 +1,15 @@
+ARG PYTHON_IMAGE
+FROM ${PYTHON_IMAGE}
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates git util-linux \
+    && rm -rf /var/lib/apt/lists/*
+COPY dependencies.txt /tmp/agentdesk-dependencies.txt
+COPY agentdesk_host.whl /tmp/agentdesk_host.whl
+RUN python -m pip install --no-cache-dir --require-hashes -r /tmp/agentdesk-dependencies.txt \
+    && python -m pip install --no-cache-dir --no-deps /tmp/agentdesk_host.whl \
+    && rm /tmp/agentdesk-dependencies.txt /tmp/agentdesk_host.whl
+RUN mkdir -p /workspace /home/agent
+ENV HOME=/home/agent PYTHONUNBUFFERED=1
+WORKDIR /workspace
+ENTRYPOINT ["/usr/local/bin/python", "-m", "agentdesk_host.runtime.worker"]

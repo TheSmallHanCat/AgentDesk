@@ -18,7 +18,7 @@ const data = useDataStore()
 const workspace = useWorkspaceStore()
 const chat = useChatStore()
 const terminalOptions = computed(() =>
-  Object.entries(chat.agents[project.value?.connectionId ?? ''] ?? {})
+  Object.entries(project.value ? chat.capabilities(project.value) : {})
     .filter(([, caps]) => caps.nativeTerminal)
     .map(([id, caps]) => ({ label: caps.name ?? id, key: id, disabled: !caps.installed })),
 )
@@ -255,19 +255,38 @@ onUnmounted(() => stopDrag?.())
             <div class="actions">
               <n-button v-if="!projects" size="tiny" @click="projects = true">›</n-button
               ><strong>{{ project.name }}</strong
+              ><span v-if="project.runtimeMode === 'isolated'" class="runtime-label">{{
+                t('runtime.isolated')
+              }}</span
               ><span class="status" :class="data.statuses[project.connectionId]?.state">{{
                 t('state.' + (data.statuses[project.connectionId]?.state ?? 'disconnected'))
               }}</span>
             </div>
             <p class="mono muted">
-              {{ connection?.name }} · {{ connection?.user }}@{{ connection?.host }} :
-              {{ project.path }}
+              <span class="agent-target"
+                >{{ t('workbench.agentServer') }} · {{ connection?.name }} ·
+                {{ connection?.user }}@{{ connection?.host }}</span
+              >
+              <span class="project-target"
+                >{{
+                  t('workbench.projectLocation', {
+                    location: t(project.deviceLocal ? 'projects.localDevice' : 'projects.server'),
+                  })
+                }}
+                · {{ project.path }}</span
+              >
             </p>
           </div>
           <div class="actions">
             <n-button
               size="small"
-              :disabled="!project.deviceLocal && !data.online(project.connectionId)"
+              :disabled="
+                project.runtimeMode === 'isolated' ||
+                (!project.deviceLocal && !data.online(project.connectionId))
+              "
+              :title="
+                project.runtimeMode === 'isolated' ? t('runtime.terminalUnavailable') : undefined
+              "
               @click="workspace.openTerminal(project)"
               >{{ t('workbench.shell') }}</n-button
             ><n-dropdown
@@ -291,7 +310,13 @@ onUnmounted(() => stopDrag?.())
         >
         <n-alert v-if="chat.errors[projectKey(project)]" type="warning" class="connection-warning"
           >{{ chat.errors[projectKey(project)] }}
-          <router-link to="/environment">{{ t('environment.title') }}</router-link
+          <router-link
+            :to="{
+              name: 'environment',
+              params: { connectionId: project.connectionId },
+              query: { projectId: project.id },
+            }"
+            >{{ t('environment.title') }}</router-link
           ><n-button text size="small" @click="chat.refresh(project)">{{
             t('common.refresh')
           }}</n-button></n-alert
@@ -313,7 +338,11 @@ onUnmounted(() => stopDrag?.())
       />
       <div v-else class="empty">{{ t('workbench.disconnected') }}</div>
     </div>
-    <SessionCreateDialog :project="creating" @close="creating = undefined" />
+    <SessionCreateDialog
+      :project="creating"
+      @created="navigateSession"
+      @close="creating = undefined"
+    />
     <n-modal :show="!!renaming" @update:show="(value) => !value && (renaming = undefined)"
       ><n-card style="width: 420px" :title="t('chat.renameSession')"
         ><n-input v-model:value="renameTitle" :maxlength="256" />
@@ -420,6 +449,9 @@ onUnmounted(() => stopDrag?.())
   flex: 1;
 }
 .target-copy p {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
   font-size: 11px;
   margin: 8px 0 0;
   overflow-wrap: anywhere;

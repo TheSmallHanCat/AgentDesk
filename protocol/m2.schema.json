@@ -114,6 +114,15 @@
         },
         "executionPolicy": {
           "$ref": "#/$defs/JsonValue"
+        },
+        "runtimeMode": {
+          "$ref": "#/$defs/RuntimeMode"
+        },
+        "runtimeId": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
@@ -167,6 +176,15 @@
           ]
         },
         "deviceId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "runtimeMode": {
+          "$ref": "#/$defs/RuntimeMode"
+        },
+        "runtimeId": {
           "type": [
             "string",
             "null"
@@ -507,13 +525,21 @@
     "EnvProbeParams": {
       "type": "object",
       "additionalProperties": false,
-      "properties": {},
+      "properties": {
+        "projectId": {
+          "type": "string"
+        }
+      },
       "required": []
     },
     "AgentStatusParams": {
       "type": "object",
       "additionalProperties": false,
-      "properties": {},
+      "properties": {
+        "projectId": {
+          "type": "string"
+        }
+      },
       "required": []
     },
     "ProjectListParams": {
@@ -547,6 +573,9 @@
         },
         "deviceId": {
           "type": "string"
+        },
+        "runtimeMode": {
+          "$ref": "#/$defs/RuntimeMode"
         }
       },
       "required": [
@@ -927,6 +956,9 @@
       "properties": {
         "agent": {
           "type": "string"
+        },
+        "projectId": {
+          "type": "string"
         }
       },
       "required": [
@@ -970,7 +1002,26 @@
         "E_LOGIN_CANCELLED",
         "E_NATIVE_UNSUPPORTED",
         "E_TARGET",
-        "E_LOGOUT_VERIFY"
+        "E_LOGOUT_VERIFY",
+        "E_RUNTIME_PLATFORM",
+        "E_RUNTIME_MISSING",
+        "E_RUNTIME_IMAGE",
+        "E_RUNTIME_ROOTLESS",
+        "E_RUNTIME_LIMITS",
+        "E_RUNTIME_UNAVAILABLE",
+        "E_RUNTIME_PROTOCOL",
+        "E_RUNTIME_PATH",
+        "E_RUNTIME_MODE",
+        "E_RUNTIME_POLICY",
+        "E_RUNTIME_PROBE",
+        "E_RUNTIME_AGENT",
+        "E_RUNTIME_TERMINAL",
+        "E_RUNTIME_EXITED",
+        "E_RUNTIME_TIMEOUT",
+        "E_RUNTIME_WORKER",
+        "E_RUNTIME_CONTROL",
+        "E_RUNTIME_BUSY",
+        "E_RUNTIME_LIMIT"
       ]
     },
     "ApprovalServerRequest": {
@@ -1111,6 +1162,9 @@
       "properties": {
         "agent": {
           "type": "string"
+        },
+        "projectId": {
+          "type": "string"
         }
       },
       "required": [
@@ -1158,6 +1212,9 @@
       "additionalProperties": false,
       "properties": {
         "agent": {
+          "type": "string"
+        },
+        "projectId": {
           "type": "string"
         }
       },
@@ -1351,6 +1408,101 @@
           "type": "boolean"
         }
       }
+    },
+    "RuntimeMode": {
+      "type": "string",
+      "enum": [
+        "direct",
+        "isolated"
+      ]
+    },
+    "RuntimeStatus": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "supported": {
+          "type": "boolean"
+        },
+        "state": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "agents": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "supported",
+        "state",
+        "agents"
+      ]
+    },
+    "WorkerSession": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "agent": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "permissionMode": {
+          "type": "string"
+        },
+        "nativeId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "agent",
+        "model",
+        "permissionMode"
+      ]
+    },
+    "WorkerRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "integer"
+        },
+        "method": {
+          "type": "string",
+          "enum": [
+            "probe",
+            "capabilities",
+            "native.exists",
+            "run.start",
+            "run.append",
+            "run.stop",
+            "login.start",
+            "login.respond",
+            "login.cancel",
+            "logout"
+          ]
+        },
+        "params": {
+          "$ref": "#/$defs/JsonValue"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ]
     }
   },
   "x-methods": {
@@ -1701,6 +1853,14 @@
       },
       "result": {
         "$ref": "#/$defs/DeviceProjectResult"
+      }
+    },
+    "runtime.status": {
+      "params": {
+        "$ref": "#/$defs/AgentStatusParams"
+      },
+      "result": {
+        "$ref": "#/$defs/RuntimeStatus"
       }
     }
   },

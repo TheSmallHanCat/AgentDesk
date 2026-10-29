@@ -15,6 +15,15 @@ pub async fn term_open(
     on_output: tauri::ipc::Channel<TerminalFrame>,
 ) -> AppResult<Reply<serde_json::Value>> {
     state.ssh.validate_target(&target)?;
+    if let Some(id) = &target.project_id {
+        if state.db.project(id)?.runtime_mode == "isolated" {
+            return Err(AppError::new(
+                "E_RUNTIME_TERMINAL",
+                "term.open",
+                "Independent terminals are unavailable in isolated workspaces",
+            ));
+        }
+    }
     if kind != "shell" {
         let client = crate::commands::session::project_client(&state, &target).await?;
         let plan = client

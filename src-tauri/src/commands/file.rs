@@ -446,6 +446,7 @@ mod tests {
 
     fn project(id: &str, connection_id: &str, path: &str) -> Project {
         Project {
+            runtime_mode: "direct".into(),
             device_local: false,
             id: id.into(),
             connection_id: connection_id.into(),

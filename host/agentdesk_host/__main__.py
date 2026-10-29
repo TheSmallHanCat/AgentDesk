@@ -34,8 +34,8 @@ class InstanceLock:
         self.file.close()
 
 
-async def serve(home: Path, fake: bool, idle_exit: float, retention_days: int = 180, device_options: dict | None = None) -> None:
-    service = HostService(home, registered_adapters(fake=fake), device_options=device_options)
+async def serve(home: Path, fake: bool, idle_exit: float, retention_days: int = 180, device_options: dict | None = None, isolation_options: dict | None = None) -> None:
+    service = HostService(home, registered_adapters(fake=fake), device_options=device_options, isolation_options=isolation_options)
     service.db.prune_events(retention_days)
     server = HostServer(service)
     stop = asyncio.Event()
@@ -59,9 +59,11 @@ async def serve(home: Path, fake: bool, idle_exit: float, retention_days: int = 
                 if idle_exit > 0 and not service.handles and not service.clients and loop.time() - service.last_activity >= idle_exit:
                     break
     finally:
-        await server.close()
-        await service.close()
-        pid_path.unlink(missing_ok=True)
+        try:
+            await server.close()
+            await service.close()
+        finally:
+            pid_path.unlink(missing_ok=True)
 
 
 def main() -> None:
@@ -81,12 +83,15 @@ def main() -> None:
     device_options = config.get("device", {})
     if not isinstance(device_options, dict) or any(type(device_options.get(key, default)) not in {int, float} or not 0 <= device_options.get(key, default) <= 86400 for key, default in (("wait_timeout", 60), ("grace", 300))):
         parser.error("device.wait_timeout and device.grace must be durations from 0 to 86400 seconds")
+    isolation_options = config.get("isolation", {})
+    if not isinstance(isolation_options, dict):
+        parser.error("isolation must be a configuration object")
     if os.name == "nt":
         parser.error("AgentDesk Host requires a Unix server")
     os.umask(0o077)
     args.home.mkdir(parents=True, exist_ok=True, mode=0o700)
     with InstanceLock(args.home / "run" / "host.lock"):
-        asyncio.run(serve(args.home, args.fake or config.get("agents", {}).get("fake", False), idle_exit, retention_days, device_options))
+        asyncio.run(serve(args.home, args.fake or config.get("agents", {}).get("fake", False), idle_exit, retention_days, device_options, isolation_options))
 
 
 if __name__ == "__main__":

@@ -8,6 +8,7 @@ import { useLoginStore } from '../stores/login'
 import { call, desktop, errorText } from '../utils/api'
 import { RequestGuard, unwrap } from '../utils/target'
 import type { Project, Reply } from '../types'
+import type { RuntimeStatus } from '../protocol/generated'
 const { t } = useI18n()
 const data = useDataStore()
 const toast = useToastStore()
@@ -21,6 +22,7 @@ const suggestions = ref<string[]>([])
 const recent = ref<string[]>([])
 const blank = (): Project => ({
   deviceLocal: false,
+  runtimeMode: 'direct',
   id: '',
   connectionId:
     data.connections.find((c) => data.online(c.id))?.id ?? data.connections[0]?.id ?? '',
@@ -34,21 +36,54 @@ const blank = (): Project => ({
   archived: false,
 })
 const form = reactive<Project>(blank())
+const isolation = ref<RuntimeStatus>()
+const isolationBusy = ref(false)
+const isolationGuard = new RequestGuard()
 const agentOptions = computed(() =>
-  Object.entries(login.agents[form.connectionId] ?? {}).map(([id, caps]) => ({
-    label: caps.name ?? id,
-    value: id,
-    disabled: !caps.installed,
-  })),
+  form.runtimeMode === 'isolated'
+    ? (isolation.value?.agents ?? []).map((id) => ({
+        label: login.capability(form.connectionId, id, form.id || undefined)?.name ?? id,
+        value: id,
+        disabled: !isolation.value?.supported,
+      }))
+    : Object.entries(login.capabilities(form.connectionId, form.id || undefined)).map(
+        ([id, caps]) => ({
+          label: caps.name ?? id,
+          value: id,
+          disabled: !caps.installed,
+        }),
+      ),
 )
 watch(
-  () => [modal.value, form.connectionId] as const,
+  () => [modal.value, form.connectionId, form.runtimeMode] as const,
   async ([open, id]) => {
-    if (!open || !id || !data.online(id)) return
+    if (!open || !id || !data.online(id) || form.runtimeMode === 'isolated') return
     try {
-      await login.refresh(id)
+      await login.refresh(id, form.id || undefined)
     } catch (value) {
       if (modal.value && form.connectionId === id) error.value = errorText(value)
+    }
+  },
+)
+watch(
+  () => [modal.value, form.connectionId, form.runtimeMode] as const,
+  async ([open, id, mode]) => {
+    isolationGuard.invalidate()
+    isolation.value = undefined
+    isolationBusy.value = false
+    if (!open || !id || mode !== 'isolated' || !data.online(id)) return
+    const owner = isolationGuard.begin(id)
+    isolationBusy.value = true
+    try {
+      const reply = await call<Reply<RuntimeStatus>>('runtime_status', { target: owner })
+      if (!isolationGuard.accepts(reply.target)) return
+      isolation.value = unwrap(owner, reply)
+      if (!form.id)
+        form.defaultAgent = isolation.value?.supported ? (isolation.value.agents[0] ?? '') : ''
+    } catch (value) {
+      if (isolationGuard.current?.requestSeq === owner.requestSeq) error.value = errorText(value)
+    } finally {
+      if (isolationGuard.current?.requestSeq === owner.requestSeq) isolationBusy.value = false
     }
   },
 )
@@ -96,7 +131,11 @@ async function pickLocal() {
   }
 }
 async function save(createDir = false) {
-  if (!form.defaultAgent) return
+  if (
+    !form.defaultAgent ||
+    (!form.id && form.runtimeMode === 'isolated' && !isolation.value?.supported)
+  )
+    return
   busy.value = true
   error.value = ''
   try {
@@ -181,6 +220,7 @@ onUnmounted(() => {
   clearTimeout(timer)
   guard.invalidate()
   recentGuard.invalidate()
+  isolationGuard.invalidate()
 })
 </script>
 <template>
@@ -242,7 +282,7 @@ onUnmounted(() => {
     </section>
     <n-modal v-model:show="modal" :mask-closable="!busy"
       ><n-card
-        style="width: 560px"
+        class="project-dialog"
         :title="t(form.id ? 'common.edit' : 'projects.new')"
         closable
         @close="modal = false"
@@ -254,9 +294,31 @@ onUnmounted(() => {
               :disabled="!!form.id"
               :options="[
                 { label: t('projects.server'), value: 'remote' },
-                { label: t('projects.localDevice'), value: 'local' },
+                {
+                  label: t('projects.localDevice'),
+                  value: 'local',
+                  disabled: form.runtimeMode === 'isolated',
+                },
               ]"
           /></n-form-item>
+          <n-form-item v-if="!form.deviceLocal" :label="t('runtime.mode')">
+            <n-select
+              v-model:value="form.runtimeMode"
+              :disabled="!!form.id"
+              :options="[
+                { label: t('runtime.direct'), value: 'direct' },
+                { label: t('runtime.isolated'), value: 'isolated' },
+              ]"
+            />
+          </n-form-item>
+          <n-alert v-if="form.runtimeMode === 'isolated'" type="info">
+            {{ t('runtime.projectHelp') }}
+            <span v-if="isolationBusy">{{ t('common.loading') }}</span>
+            <span v-else-if="!form.id && !isolation?.supported"
+              >{{ t('runtime.setupRequired') }}
+              {{ isolation?.reason ? t('errors.' + isolation.reason, isolation.reason) : '' }}</span
+            >
+          </n-alert>
           <n-form-item v-if="form.deviceLocal" :label="t('projects.directory')"
             ><n-input :value="form.path" readonly /><n-button
               :disabled="!!form.id"
@@ -314,6 +376,9 @@ onUnmounted(() => {
                 !form.name.trim() ||
                 !form.connectionId ||
                 !form.defaultAgent ||
+                (!form.id &&
+                  form.runtimeMode === 'isolated' &&
+                  (!isolation?.supported || isolationBusy)) ||
                 (!!form.deviceLocal && form.permissionMode === 'plan')
               "
               @click="save()"
@@ -325,3 +390,17 @@ onUnmounted(() => {
     >
   </section>
 </template>
+<style scoped>
+.project-dialog {
+  width: min(560px, calc(100vw - 32px));
+  max-height: calc(100dvh - 48px);
+}
+.project-dialog :deep(.n-card-content) {
+  min-height: 0;
+  overflow-y: auto;
+}
+.project-dialog :deep(.n-card-header),
+.project-dialog :deep(.n-card__footer) {
+  flex-shrink: 0;
+}
+</style>

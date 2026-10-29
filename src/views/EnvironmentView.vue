@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { computed, onUnmounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { Channel } from '@tauri-apps/api/core'
 import { useI18n } from 'vue-i18n'
 import { useDataStore } from '../stores/data'
@@ -24,6 +24,8 @@ interface Environment {
     activeRuns?: number
   }
   sameHostConnections?: string[]
+  isolation?: { supported: boolean; state: string; reason?: string; agents: string[] }
+  runtime?: { mode: string; id?: string }
 }
 interface Plan {
   planId: string
@@ -33,6 +35,7 @@ interface Plan {
   [key: string]: unknown
 }
 const route = useRoute()
+const router = useRouter()
 const rollbackConfirm = ref(false)
 const connectionId = ref(
     typeof route.params.connectionId === 'string' ? route.params.connectionId : '',
@@ -54,6 +57,20 @@ const options = computed(() =>
   })),
 )
 const online = computed(() => data.online(connectionId.value))
+const projectId = computed(() =>
+  typeof route.query.projectId === 'string' ? route.query.projectId : undefined,
+)
+const scopedProject = computed(() =>
+  data.projects.find(
+    (value) => value.id === projectId.value && value.connectionId === connectionId.value,
+  ),
+)
+watch(
+  () => route.params.connectionId,
+  (id) => {
+    if (typeof id === 'string') connectionId.value = id
+  },
+)
 watch(
   () => data.connections.map((value) => value.id).join(','),
   () => {
@@ -63,27 +80,38 @@ watch(
   { immediate: true },
 )
 watch(
-  connectionId,
+  [connectionId, () => route.params.connectionId, projectId],
   () => {
+    ++revision
+    busy.value = false
     void login.close()
     environment.value = undefined
     plan.value = undefined
     error.value = ''
+    if (connectionId.value && route.params.connectionId !== connectionId.value) {
+      void router.replace({
+        name: 'environment',
+        params: { connectionId: connectionId.value },
+        query: scopedProject.value ? { projectId: scopedProject.value.id } : {},
+      })
+      return
+    }
     void probe()
   },
   { immediate: true },
 )
+onUnmounted(() => ++revision)
 async function probe() {
   if (!online.value) return
   const request = ++revision,
-    owner = target(connectionId.value)
+    owner = target(connectionId.value, projectId.value)
   busy.value = true
   error.value = ''
   try {
     const result = unwrap(owner, await call<Reply<Environment>>('env_probe', { target: owner }))
     if (request === revision) {
       environment.value = result
-      login.setCapabilities(owner.connectionId, result.agents)
+      login.setCapabilities(owner.connectionId, result.agents, owner.projectId)
     }
   } catch (value) {
     if (request === revision) error.value = errorText(value)
@@ -196,6 +224,21 @@ async function hostAction(command: 'host_start' | 'host_stop' | 'host_rollback')
         style="width: 240px"
       />
     </div>
+    <n-alert v-if="scopedProject" type="info" class="runtime-scope">
+      {{
+        t('runtime.scope', {
+          name: scopedProject.name,
+          mode: t(scopedProject.runtimeMode === 'isolated' ? 'runtime.isolated' : 'runtime.direct'),
+        })
+      }}
+    </n-alert>
+    <n-alert
+      v-if="environment?.isolation?.supported && !projectId"
+      type="info"
+      class="runtime-scope"
+    >
+      {{ t('runtime.configured') }}
+    </n-alert>
     <n-alert v-if="error" type="error" closable @close="error = ''">{{ error }}</n-alert>
     <div v-if="!online" class="empty">
       <h2>{{ t('environment.connectFirst') }}</h2>
@@ -280,7 +323,7 @@ async function hostAction(command: 'host_start' | 'host_stop' | 'host_rollback')
       <section v-if="environment" class="agents-panel">
         <h2>{{ t('environment.agents') }}</h2>
         <article
-          v-for="(caps, id) in login.agents[connectionId] ?? environment.agents"
+          v-for="(caps, id) in login.capabilities(connectionId, projectId)"
           :key="id"
           :data-agent="id"
           class="agent-row"
@@ -293,6 +336,7 @@ async function hostAction(command: 'host_start' | 'host_stop' | 'host_rollback')
           <AgentLoginStatus
             :agent="String(id)"
             :connection-id="connectionId"
+            :project-id="projectId"
             :capability="caps"
             :disabled="running || !environment.host.running"
           />
