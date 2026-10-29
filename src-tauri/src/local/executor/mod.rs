@@ -3,13 +3,16 @@
 use crate::error::{AppError, AppResult};
 use base64::Engine;
 use serde::Serialize;
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 use zeroize::Zeroize;
 
 #[cfg(windows)]
 use crate::platform::executor::{self as windows, Job, LocalProcess};
 #[cfg(windows)]
-use std::{ffi::OsStr, time::Duration};
+use std::ffi::OsStr;
 
 #[derive(Clone)]
 pub struct ExecutorResources {
