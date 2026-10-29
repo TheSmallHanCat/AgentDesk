@@ -3,8 +3,8 @@ use crate::{
     host::{
         client::{remote_home, HostClient},
         installer::{
-            restore_script, rollback_script_for, snapshot_script, start_script, HostLinks,
-            STOP_SCRIPT,
+            database_check_script, restore_script, rollback_script_for, snapshot_script,
+            start_script, HostLinks, STOP_SCRIPT,
         },
     },
     models::{Reply, Target},
@@ -16,6 +16,18 @@ use tauri::Manager;
 
 fn install_cancelled() -> AppError {
     AppError::new("E_CANCELLED", "env.install", "Installation cancelled")
+}
+fn database_error(mut error: AppError) -> AppError {
+    if error
+        .details
+        .as_ref()
+        .and_then(|value| value["exitCode"].as_u64())
+        == Some(78)
+    {
+        error.code = "E_DATABASE_SCHEMA".into();
+        error.message = "The selected Host cannot use the current database".into();
+    }
+    error
 }
 fn has_fake(client: &Arc<HostClient>) -> AppResult<bool> {
     Ok(client
@@ -121,7 +133,8 @@ pub async fn recover_host(
             "install.recover",
             &restore_script(before, expected, restart_fake),
         )
-        .await;
+        .await
+        .map_err(database_error);
     if let Err(error) = recovered {
         return Err(if client.is_some() {
             cancel_shutdown_after_failure(state, target, error).await
@@ -422,7 +435,7 @@ pub async fn execute_host_install(
     };
     state.installer.finish(&plan_id);
     let _ = on_progress.send(json!({"target":target,"done":true,"success":result.is_ok()}));
-    result.map_err(|error| state.ssh.install_error(&target, error))
+    result.map_err(|error| state.ssh.install_error(&target, database_error(error)))
 }
 #[tauri::command]
 pub fn env_install_cancel(
@@ -447,7 +460,8 @@ pub async fn host_start(
             "host.start",
             &start_script(fake_agent.unwrap_or(false)),
         )
-        .await?;
+        .await
+        .map_err(database_error)?;
     let client = state.hosts.client(&state.ssh, &state.db, &target).await?;
     let hello = client
         .hello
@@ -513,6 +527,15 @@ pub async fn rollback_host(
             .exec_stage(&target, "rollback.snapshot", &snapshot_script(true))
             .await?,
     )?;
+    state
+        .ssh
+        .exec_stage(
+            &target,
+            "rollback.database",
+            &database_check_script(before.previous.as_deref().unwrap()),
+        )
+        .await
+        .map_err(database_error)?;
     let old_client = host_or_inactive(state, &target).await?;
     let previous_fake = old_client
         .as_ref()
@@ -563,7 +586,7 @@ pub async fn rollback_host(
         client.request("env.probe", json!({})).await
     }
     .await;
-    match result {
+    match result.map_err(database_error) {
         Ok(probe) => Ok(probe),
         Err(error) => match recover_host(
             state,
@@ -582,6 +605,19 @@ pub async fn rollback_host(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn database_rejection_preserves_diagnostics_without_masking_transport_errors() {
+        let error = database_error(
+            AppError::new("E_EXEC", "rollback.database", "Failed")
+                .with_details(json!({"exitCode":78,"stderrTail":"E_DATABASE_SCHEMA"})),
+        );
+        assert_eq!(error.code, "E_DATABASE_SCHEMA");
+        assert_eq!(error.details.unwrap()["exitCode"], 78);
+        assert_eq!(
+            database_error(AppError::new("E_TIMEOUT", "rollback.database", "Timed out")).code,
+            "E_TIMEOUT"
+        );
+    }
     #[test]
     fn failed_maintenance_cancellation_survives_recovery_error() {
         let recovery = shutdown_cancel_error(

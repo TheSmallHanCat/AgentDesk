@@ -3,7 +3,6 @@ import asyncio
 import json
 import os
 from pathlib import Path
-import sqlite3
 import sys
 from types import SimpleNamespace
 
@@ -15,7 +14,6 @@ from agentdesk_host.runtime.adapter import IsolatedAdapter, RuntimePool
 from agentdesk_host.runtime.client import RuntimeClient
 from agentdesk_host.runtime.engine import OWNER_LABEL, RUNTIME_LABEL, PodmanEngine, validate_project
 from agentdesk_host.server.service import Client, HostService
-from agentdesk_host.store.database import Database, MIGRATIONS
 
 IDENTITY = 'a' * 64
 RUNTIME = 'rt_' + 'b' * 32
@@ -320,25 +318,6 @@ def test_cpu_quota_inspection_accepts_equivalent_podman_representation(tmp_path,
     engine.verify(record, RUNTIME, project, data)
     record['HostConfig']['CpuQuota'] = 400_000
     with pytest.raises(AdapterError): engine.verify(record, RUNTIME, project, data)
-
-
-def test_legacy_database_upgrade_preserves_project_session_and_events(tmp_path):
-    path = tmp_path / 'host.db'
-    connection = sqlite3.connect(path)
-    connection.executescript('\n'.join(MIGRATIONS[:2]) + '\nPRAGMA user_version=2;')
-    connection.execute("INSERT INTO meta VALUES('host_id','existing-host')")
-    connection.execute("INSERT INTO meta VALUES('seq','17')")
-    connection.execute("INSERT INTO projects(id,path,display_name,created_at) VALUES('p','/project','Project','time')")
-    connection.execute("INSERT INTO sessions(id,project_id,agent,native_id,title,model,permission_mode,status,created_at,updated_at) VALUES('s','p','claude','native-id','Title','model','default','idle','time','time')")
-    connection.execute("INSERT INTO events(seq,session_id,ts,type,payload_json) VALUES(17,'s','time','item.completed','{}')")
-    connection.commit(); connection.close()
-    database = Database(path)
-    try:
-        assert database.host_id == 'existing-host' and database.current_seq == 17
-        assert database.one("SELECT runtime_mode,runtime_id FROM projects WHERE id='p'") == {'runtime_mode': 'direct', 'runtime_id': None}
-        assert database.one("SELECT native_id,runtime_id FROM sessions WHERE id='s'") == {'native_id': 'native-id', 'runtime_id': None}
-        assert database.one('SELECT COUNT(*) AS total FROM events')['total'] == 1
-    finally: database.close()
 
 
 @pytest.mark.parametrize('busy', [False, True])

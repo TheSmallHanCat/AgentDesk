@@ -417,5 +417,6 @@
   "errors.E_RUNTIME_WORKER": "The isolated workspace operation failed.",
   "errors.E_RUNTIME_CONTROL": "The workspace control request failed.",
   "errors.E_RUNTIME_BUSY": "The workspace is handling other requests.",
-  "errors.E_RUNTIME_LIMIT": "All isolated workers are busy. Finish a task or login, then retry."
+  "errors.E_RUNTIME_LIMIT": "All isolated workers are busy. Finish a task or login, then retry.",
+  "errors.E_DATABASE_SCHEMA": "The selected Host cannot verify or use the current database. Select a compatible version."
 }

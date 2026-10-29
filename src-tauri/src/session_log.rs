@@ -152,6 +152,7 @@ pub fn sanitized_install_tail(stderr: &[u8]) -> String {
         "http 503",
         "http 504",
         "database is locked",
+        "e_database_schema",
         "exit 75",
         "traceback",
         "syntaxerror",

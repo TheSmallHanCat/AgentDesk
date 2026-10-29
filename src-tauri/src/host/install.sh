@@ -87,6 +87,8 @@ phase dependencies.install
 timeout 240 "$stage/uv" pip install --python "$version/venv/bin/python" --default-index https://pypi.org/simple --only-binary :all: --require-hashes -r "$stage/dependencies.txt"
 phase host.install
 "$stage/uv" pip install --python "$version/venv/bin/python" --default-index https://pypi.org/simple --no-deps "$stage/$AGENTDESK_WHEEL"
+phase database.check
+check_host_database "$version/venv/bin/python"
 printf '%s\n' 'Installing official Codex and matching sandbox resources'
 mkdir -p "$version/bin/codex-resources"
 phase codex.download

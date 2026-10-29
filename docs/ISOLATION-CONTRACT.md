@@ -9,7 +9,7 @@
 - `Project.runtimeMode` 为 `direct` 或 `isolated`，省略时为 `direct`。已有项目不能改变运行方式；需要不同运行方式时新建项目索引。
 - Host 为每个隔离项目生成固定 `runtimeId`，会话创建时记录相同 ID。恢复、发送、登录与能力检测均从持久归属解析环境，不接受调用方指定容器或挂载路径。
 - 隔离模式仅接受服务器目录。拒绝本机项目、覆盖 Host 数据的目录、SSH 配置目录、系统敏感目录及指向外部 Git 元数据的 worktree。
-- 旧项目与旧会话的运行方式保持 `direct`，不搬动文件，不复制令牌或原生会话。Host 数据库增加字段并提升 schema 版本；旧版 Host 不能直接读取升级后的数据库。
+- 普通项目的运行方式为 `direct`，不搬动文件，不复制令牌或原生会话。Host 只接受当前数据库格式；新安装直接创建完整结构，不自动迁移其他格式的数据库。
 - 握手提供 `features.isolatedRuntime=1`。桌面遇到不支持此能力的 Host，或 Host 未返回隔离归属时，拒绝隔离操作。
 
 ## 容器边界
@@ -60,6 +60,6 @@ python scripts/build/build_host_resources.py
 
 Linux 实机验收使用 `python scripts/e2e/smoke_isolation_runtime.py --image IMAGE_ID`，其中 `IMAGE_ID` 为已准备镜像的实际不可变 ID。脚本只创建所属临时目录和容器，验证边界及 Host 标记不可见，再清理临时资源；不运行 Agent 登录或模型请求。正式使用前还需要用户授权后的 Claude 登录、真实任务、重连、审批与停止验收。
 
-停用时先停止隔离任务，再归档对应项目；持久目录保留以供恢复。不要将隔离会话改为普通环境恢复。二进制降级需要部署前的数据库备份，不能让旧 Host 强行读取新 schema；本实现不自动执行备份恢复、用户数据迁移或删除。
+停用时先停止隔离任务，再归档对应项目；持久目录保留以供恢复。不要将隔离会话改为普通环境恢复。安装、启动和版本切换前检查数据库兼容性；目标版本不兼容或无法完成检查时拒绝操作，不迁移、不降级数据库，也不自动恢复备份。
 
 实现依据：[Podman rootless 前置条件](https://docs.podman.io/en/latest/markdown/podman.1.html#rootless-mode)、[容器运行选项](https://docs.podman.io/en/latest/markdown/podman-run.1.html)。具体 Linux 环境的可用性以运行探测和实机验收为准。

@@ -15,6 +15,8 @@ use tokio::io::AsyncWriteExt;
 use tokio_util::sync::CancellationToken;
 use zeroize::Zeroizing;
 
+const DATABASE_CHECK: &str = include_str!("check_database.sh");
+
 #[derive(Clone)]
 pub struct InstallPlan {
     pub target: Target,
@@ -106,6 +108,7 @@ impl Installer {
                 );
             }
         }
+        script.push_str(DATABASE_CHECK);
         script.push_str(include_str!("install.sh"));
         let value = json!({"planId":id,"version":version,"buildId":build_id,"fakeAgent":fake,"artifacts":files,"paths":[stage,format!("{home}/.agentdesk/runtime"),format!("{home}/.agentdesk/host/versions/{build_id}")],"commands":script,"warning":"System compatibility and sandbox checks must pass before activation"});
         self.state
@@ -325,7 +328,7 @@ impl Installer {
                     }
                 }
             }
-            if exit != Some(0) || !committed { return Err(AppError::new("E_INSTALL", "env.install", format!("Installation failed (status {exit:?})"))); }
+            if exit != Some(0) || !committed { return Err(AppError::new(if exit == Some(78) { "E_DATABASE_SCHEMA" } else { "E_INSTALL" }, "env.install", format!("Installation failed (status {exit:?})"))); }
             Ok(plan.value.clone())
         }).await.map_err(|_| AppError::new("E_TIMEOUT", "env.install", "Installation exceeded 15 minutes")).and_then(|r| r);
         let result = result.map_err(|mut error| {
@@ -435,6 +438,7 @@ impl InstallOutput {
                         "venv.create",
                         "dependencies.install",
                         "host.install",
+                        "database.check",
                         "codex.download",
                         "bwrap.download",
                         "codex.extract",
@@ -483,6 +487,7 @@ pub fn start_script(fake: bool) -> String {
     format!(
         r#"set -eu
 umask 077
+{database_check}
 base="$HOME/.agentdesk"
 test -x "$base/host/current/venv/bin/python"
 mkdir -p "$base/run" "$base/state"
@@ -490,6 +495,7 @@ if test -S "$base/run/host.sock" && test -r "$base/run/host.pid"; then
   pid=$(cat "$base/run/host.pid")
   if kill -0 "$pid" 2>/dev/null; then exit 0; fi
 fi
+check_host_database "$base/host/current/venv/bin/python"
 export AGENTDESK_CODEX_PATH="$base/host/current/bin/codex"
 export AGENTDESK_FAKE_AGENT={fake}
 if timeout 5 systemctl --user show-environment >/dev/null 2>&1; then
@@ -506,7 +512,8 @@ i=0
 while test "$i" -lt 100; do test ! -S "$base/run/host.sock" || exit 0; sleep 0.1; i=$((i+1)); done
 exit 75
 "#,
-        fake = if fake { "1" } else { "0" }
+        fake = if fake { "1" } else { "0" },
+        database_check = DATABASE_CHECK,
     )
 }
 
@@ -527,7 +534,7 @@ fi
 pub fn rollback_script() -> String {
     let marker = uuid::Uuid::new_v4().simple().to_string();
     format!(
-        "{LINKS_HEADER}mkdir -p \"$base\"
+        "{LINKS_HEADER}{DATABASE_CHECK}mkdir -p \"$base\"
 exec 9>\"$base/install.lock\"
 flock -n 9 || exit 76
 "
@@ -535,6 +542,7 @@ flock -n 9 || exit 76
 old=$(managed_link previous)
 current=$(managed_link current)
 test -x "$old/venv/bin/python"
+check_host_database "$old/venv/bin/python"
 ln -s "$old" "$base/current.__MARKER__"
 ln -s "$current" "$base/previous.__MARKER__"
 mv -Tf "$base/current.__MARKER__" "$base/current"
@@ -585,6 +593,12 @@ pub fn snapshot_script(require_previous: bool) -> String {
     };
     format!("{LINKS_HEADER}current=$(managed_link current)\nprevious=$(managed_link previous)\n{check}printf '%s\n%s\n' \"$current\" \"$previous\"\n")
 }
+pub fn database_check_script(version: &str) -> String {
+    format!(
+        "set -eu\n{DATABASE_CHECK}check_host_database {}\n",
+        sftp::quote(&format!("{version}/venv/bin/python"))
+    )
+}
 pub fn restore_script(links: &HostLinks, expected: &str, restart_fake: Option<bool>) -> String {
     let script = r#"mkdir -p "$base"
 exec 9>"$base/install.lock"
@@ -594,6 +608,9 @@ expected=__EXPECTED__
 old_current=__CURRENT__
 old_previous=__PREVIOUS__
 if test "$current" = "$expected"; then
+  if test -n "$old_current"; then
+    check_host_database "$old_current/venv/bin/python"
+  fi
 __STOP__
   if test -n "$old_current"; then
     ln -s "$old_current" "$base/current.restore.__MARKER__"
@@ -619,7 +636,7 @@ __RESTART__
     // STOP_SCRIPT resets base to ~/.agentdesk; restore the link root afterward.
     let stop = format!("{}\nbase=\"$HOME/.agentdesk/host\"", STOP_SCRIPT);
     format!(
-        "{LINKS_HEADER}{}",
+        "{LINKS_HEADER}{DATABASE_CHECK}{}",
         script
             .replace("__EXPECTED__", &sftp::quote(expected))
             .replace(
@@ -835,6 +852,21 @@ mod tests {
         .status
         .success());
         assert_eq!(std::fs::read_link(base.join("current")).unwrap(), old);
+        std::fs::write(old.join("venv/bin/python"), "#!/bin/sh\nexit 78\n").unwrap();
+        assert!(run(dir.path(), &rollback_script_for(&original))
+            .status
+            .success());
+        let run_dir = dir.path().join(".agentdesk/run");
+        std::fs::create_dir_all(&run_dir).unwrap();
+        std::fs::write(run_dir.join("host.pid"), "invalid").unwrap();
+        let rejected = run(
+            dir.path(),
+            &restore_script(&original, new.to_str().unwrap(), None),
+        );
+        assert_eq!(rejected.status.code(), Some(78));
+        assert_eq!(std::fs::read_link(base.join("current")).unwrap(), new);
+        assert_eq!(std::fs::read_link(base.join("previous")).unwrap(), old);
+        assert_eq!(std::fs::read(run_dir.join("host.pid")).unwrap(), b"invalid");
         std::fs::remove_file(base.join("current")).unwrap();
         symlink(&other, base.join("current")).unwrap();
         assert!(!run(

@@ -417,5 +417,6 @@
   "errors.E_RUNTIME_WORKER": "隔离工作区操作失败。",
   "errors.E_RUNTIME_CONTROL": "隔离工作区控制请求失败。",
   "errors.E_RUNTIME_BUSY": "隔离工作区正在处理其他请求。",
-  "errors.E_RUNTIME_LIMIT": "隔离工作区进程均在使用中，请结束任务或登录后重试。"
+  "errors.E_RUNTIME_LIMIT": "隔离工作区进程均在使用中，请结束任务或登录后重试。",
+  "errors.E_DATABASE_SCHEMA": "目标 Host 无法验证或使用当前数据库，请使用兼容版本。"
 }

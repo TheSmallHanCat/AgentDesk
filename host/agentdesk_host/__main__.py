@@ -6,11 +6,13 @@ import asyncio
 import json
 import os
 import signal
+import sqlite3
 from pathlib import Path
 
 from .adapters import registered_adapters
 from .server.service import HostService
 from .server.transport import HostServer
+from .store.database import SCHEMA_VERSION, SchemaVersionError, check_database
 
 
 class InstanceLock:
@@ -71,7 +73,15 @@ def main() -> None:
     parser.add_argument("--home", type=Path, default=Path.home() / ".agentdesk")
     parser.add_argument("--fake", action="store_true", default=os.environ.get("AGENTDESK_FAKE_AGENT") == "1")
     parser.add_argument("--idle-exit", type=float, default=None)
+    parser.add_argument("--check-database", action="store_true", help="Check database compatibility without starting the Host")
     args = parser.parse_args()
+    if args.check_database:
+        try:
+            version = check_database(args.home / "state" / "host.sqlite")
+        except (SchemaVersionError, sqlite3.Error, OSError):
+            parser.exit(78, "E_DATABASE_SCHEMA: Host database is incompatible or unreadable\n")
+        print(json.dumps({"compatible": True, "schemaVersion": version, "supportedVersion": SCHEMA_VERSION}))
+        return
     config_path = args.home / "config.json"
     config = json.loads(config_path.read_text(encoding="utf-8")) if config_path.is_file() else {}
     idle_exit = args.idle_exit if args.idle_exit is not None else config.get("host", {}).get("idle_exit", 24 * 3600)
@@ -91,7 +101,10 @@ def main() -> None:
     os.umask(0o077)
     args.home.mkdir(parents=True, exist_ok=True, mode=0o700)
     with InstanceLock(args.home / "run" / "host.lock"):
-        asyncio.run(serve(args.home, args.fake or config.get("agents", {}).get("fake", False), idle_exit, retention_days, device_options, isolation_options))
+        try:
+            asyncio.run(serve(args.home, args.fake or config.get("agents", {}).get("fake", False), idle_exit, retention_days, device_options, isolation_options))
+        except SchemaVersionError:
+            parser.exit(78, "E_DATABASE_SCHEMA: Host database format is incompatible\n")
 
 
 if __name__ == "__main__":

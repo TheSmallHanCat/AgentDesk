@@ -58,11 +58,11 @@ python scripts/browser/smoke_workflow.py --url http://127.0.0.1:1420
 ## 隔离工作区回归
 
 ```bash
-uv run --project host python -m pytest host/tests/test_isolation.py host/tests/test_isolation_image.py -q
+uv run --project host python -m pytest host/tests/test_database_format.py host/tests/test_isolation.py host/tests/test_isolation_image.py -q
 python scripts/browser/smoke_isolation.py --url http://127.0.0.1:1420
 ```
 
-Python 用例验证容器策略、旧数据库升级、真实 stdio Worker 的审批与停止、未知送达状态、登录归属、空闲回收及清理失败。浏览器用例验证隔离能力缓存、禁止宿主终端、明确选择运行方式及缺少镜像时禁止保存；均不访问真实模型服务。
+Python 用例验证数据库初始化、同格式数据保留、不兼容格式只读拒绝、容器策略、真实 stdio Worker 的审批与停止、未知送达状态、登录归属、空闲回收及清理失败。浏览器用例验证隔离能力缓存、禁止宿主终端、明确选择运行方式及缺少镜像时禁止保存；均不访问真实模型服务。
 
 `scripts/build/prepare_isolation_image.py` 默认只准备经过校验的镜像上下文。已有镜像的 Linux 实机边界检查使用 `scripts/e2e/smoke_isolation_runtime.py --image IMAGE_ID`，不登录或调用模型。具体前置与回退说明见 [隔离工作区契约](../../docs/ISOLATION-CONTRACT.md)。
 
